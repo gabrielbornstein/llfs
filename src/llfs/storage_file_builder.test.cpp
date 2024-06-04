@@ -352,7 +352,8 @@ TEST_F(StorageFileBuilderTest, WriteReadFile)
           1u);
 
       {
-        llfs::Status status = storage_context->add_existing_file(storage_file);
+        llfs::StatusOr<std::vector<boost::uuids::uuid>> status =
+            storage_context->add_existing_file(storage_file);
         ASSERT_TRUE(status.ok()) << BATT_INSPECT(status);
       }
     }
@@ -467,7 +468,8 @@ TEST_F(StorageFileBuilderTest, WriteReadManyPackedConfigs)
         kSlots);
 
     {
-      llfs::Status status = storage_context->add_existing_file(storage_file);
+      llfs::StatusOr<std::vector<boost::uuids::uuid>> status =
+          storage_context->add_existing_file(storage_file);
       ASSERT_TRUE(status.ok()) << BATT_INSPECT(status);
     }
   }

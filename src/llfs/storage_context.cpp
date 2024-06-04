@@ -38,7 +38,8 @@ batt::SharedPtr<StorageObjectInfo> StorageContext::find_object_by_uuid(
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status StorageContext::add_existing_named_file(std::string&& file_name, i64 start_offset)
+StatusOr<std::vector<boost::uuids::uuid>> StorageContext::add_existing_named_file(
+    std::string&& file_name, i64 start_offset)
 {
   StatusOr<int> fd = open_file_read_write(file_name, OpenForAppend{false}, OpenRawIO{true});
   BATT_REQUIRE_OK(fd);
@@ -54,8 +55,8 @@ Status StorageContext::add_existing_named_file(std::string&& file_name, i64 star
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status StorageContext::add_new_file(const std::string& file_name,
-                                    const std::function<Status(StorageFileBuilder&)>& initializer)
+StatusOr<std::vector<boost::uuids::uuid>> StorageContext::add_new_file(
+    const std::string& file_name, const std::function<Status(StorageFileBuilder&)>& initializer)
 {
   {
     BATT_ASSIGN_OK_RESULT(
@@ -81,17 +82,20 @@ Status StorageContext::add_new_file(const std::string& file_name,
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status StorageContext::add_existing_file(const batt::SharedPtr<StorageFile>& file)
+StatusOr<std::vector<boost::uuids::uuid>> StorageContext::add_existing_file(
+    const batt::SharedPtr<StorageFile>& file)
 {
+  std::vector<boost::uuids::uuid> uuids;
   file->find_all_objects()  //
       | seq::for_each([&](const FileOffsetPtr<const PackedConfigSlot&>& slot) {
           LLFS_VLOG(1) << "Adding " << *slot << " to storage context";
 
+          uuids.push_back(slot->uuid);
           this->index_.emplace(slot->uuid,
                                batt::make_shared<StorageObjectInfo>(batt::make_copy(file), slot));
         });
 
-  return OkStatus();
+  return uuids;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

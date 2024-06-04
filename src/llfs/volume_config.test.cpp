@@ -117,34 +117,35 @@ TEST_F(VolumeConfigTest, ConfigRestore)
 
   // Create a storage file with two page arenas, one for small pages (4kb), one for large (2mb).
   //
-  llfs::Status file_create_status = this->storage_context_->add_new_file(
-      kStorageFilePath.string(), [&](llfs::StorageFileBuilder& builder) -> llfs::Status {
-        llfs::StatusOr<llfs::FileOffsetPtr<const llfs::PackedVolumeConfig&>> p_volume_config =
-            builder.add_object(llfs::VolumeConfigOptions{
-                .base =
-                    llfs::VolumeOptions{
-                        .name = kTestVolumeName,
-                        .uuid = llfs::None,
-                        .max_refs_per_page = llfs::MaxRefsPerPage{1},
-                        .trim_lock_update_interval = llfs::TrimLockUpdateInterval{4 * kKiB},
-                        .trim_delay_byte_count = llfs::TrimDelayByteCount{0},
-                    },
-                .root_log =
-                    llfs::LogDeviceConfigOptions{
-                        .uuid = llfs::None,
-                        .pages_per_block_log2 = llfs::None,
-                        .log_size = 8 * kMiB,
-                    },
-                .recycler_max_buffered_page_count = llfs::None,
-            });
+  llfs::StatusOr<std::vector<boost::uuids::uuid>> file_create_status =
+      this->storage_context_->add_new_file(
+          kStorageFilePath.string(), [&](llfs::StorageFileBuilder& builder) -> llfs::Status {
+            llfs::StatusOr<llfs::FileOffsetPtr<const llfs::PackedVolumeConfig&>> p_volume_config =
+                builder.add_object(llfs::VolumeConfigOptions{
+                    .base =
+                        llfs::VolumeOptions{
+                            .name = kTestVolumeName,
+                            .uuid = llfs::None,
+                            .max_refs_per_page = llfs::MaxRefsPerPage{1},
+                            .trim_lock_update_interval = llfs::TrimLockUpdateInterval{4 * kKiB},
+                            .trim_delay_byte_count = llfs::TrimDelayByteCount{0},
+                        },
+                    .root_log =
+                        llfs::LogDeviceConfigOptions{
+                            .uuid = llfs::None,
+                            .pages_per_block_log2 = llfs::None,
+                            .log_size = 8 * kMiB,
+                        },
+                    .recycler_max_buffered_page_count = llfs::None,
+                });
 
-        BATT_REQUIRE_OK(p_volume_config);
+            BATT_REQUIRE_OK(p_volume_config);
 
-        volume_uuid = (*p_volume_config)->uuid;
-        root_log_uuid = (*p_volume_config)->root_log_uuid;
+            volume_uuid = (*p_volume_config)->uuid;
+            root_log_uuid = (*p_volume_config)->root_log_uuid;
 
-        return llfs::OkStatus();
-      });
+            return llfs::OkStatus();
+          });
 
   ASSERT_TRUE(file_create_status.ok()) << BATT_INSPECT(file_create_status);
 
@@ -214,7 +215,7 @@ TEST_F(VolumeConfigTest, ConfigRestore)
   {
     this->create_storage_context();
 
-    llfs::Status file_add_status =
+    llfs::StatusOr<std::vector<boost::uuids::uuid>> file_add_status =
         this->storage_context_->add_existing_named_file(kStorageFilePath);
     ASSERT_TRUE(file_add_status.ok()) << BATT_INSPECT(file_add_status);
 

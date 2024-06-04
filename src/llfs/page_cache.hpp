@@ -35,6 +35,7 @@
 #include <llfs/seq.hpp>
 #include <llfs/slot_read_lock.hpp>
 #include <llfs/status.hpp>
+#include <llfs/storage_context.hpp>
 
 #include <llfs/logging.hpp>
 
@@ -194,6 +195,9 @@ class PageCache : public PageLoader
 
   Slice<PageDeviceEntry* const> devices_with_page_size(usize size);
 
+  // void add_arena(StorageContext& storage_context, const std::filesystem::path& dir_path,
+  //                u64 increase_capacity);
+
   Slice<PageDeviceEntry* const> all_devices();
 
   const PageArena& arena_for_page_id(PageId id_val);
@@ -337,6 +341,8 @@ class PageCache : public PageLoader
   batt::ReadWriteMutex<std::array<Slice<PageDeviceEntry* const>, kMaxPageSizeLog2>>
       page_devices_by_page_size_log2_;
 
+  // TODO: [Gabe Bornstein 6/3/24] Does `cache_slot_pool_by_page_size_log2_` need a Mutex?
+  ///
   // A pool of cache slots for each page size.
   //
   std::array<boost::intrusive_ptr<PageCacheSlot::Pool>, kMaxPageSizeLog2>

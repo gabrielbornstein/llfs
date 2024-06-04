@@ -439,7 +439,7 @@ void PageCache::prefetch_hint(PageId page_id)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Slice<PageCache::PageDeviceEntry* const> PageCache::all_devices()
+Slice<PageCache::PageDeviceEntry const* const> PageCache::all_devices()
 {
   batt::ScopedReadLock<std::vector<PageDeviceEntry*>> page_devices_by_size_lock{
       this->page_devices_by_page_size_};
@@ -467,6 +467,191 @@ Slice<PageCache::PageDeviceEntry* const> PageCache::devices_with_page_size_log2(
 
   return (*page_devices_by_size_log2_lock)[size_log2];
 }
+
+// void PageCache::add_arena(StorageContext& storage_context, const std::filesystem::path& dir_path,
+//                           u64 increase_capacity)
+// {
+//   // TODO: [Gabe Bornstein 6/3/24] A lot of this code is copy-pasted and could be de-duped.
+//   //
+
+//   // Calculate the page counts from the total capacity and TreeOptions.
+//   //
+//   const auto max_in_refs_size_per_leaf = 64 * kMaxTreeHeight;
+
+//   const auto leaf_page_count =
+//       llfs::PageCount{initial_capacity / (tree_options.leaf_size() + max_in_refs_size_per_leaf)};
+
+//   const auto total_leaf_pages_size = leaf_page_count * tree_options.leaf_size();
+//   const auto total_node_pages_size = initial_capacity - total_leaf_pages_size;
+
+//   const auto node_page_count = llfs::PageCount{total_node_pages_size / tree_options.node_size()};
+
+//   VLOG(1) << BATT_INSPECT(initial_capacity) << BATT_INSPECT(node_page_count)
+//           << BATT_INSPECT(leaf_page_count);
+
+//   // Create the page file.
+//   //
+//   const char* const kPageFileName = "pages.llfs";
+//   StatusOr<std::vector<boost::uuids::uuid>> page_file_status = storage_context.add_new_file(
+//       (dir_path / kPageFileName).string(),
+//       [&](llfs::StorageFileBuilder& builder) -> Status  //
+//       {
+//         // Add an arena for node pages.
+//         //
+//         llfs::StatusOr<llfs::FileOffsetPtr<const llfs::PackedPageArenaConfig&>> node_pool_config
+//         =
+//             builder.add_object(
+//                 llfs::PageArenaConfigOptions{
+//                     .uuid = None,
+//                     .page_allocator =
+//                         llfs::CreateNewPageAllocator{
+//                             .options =
+//                                 llfs::PageAllocatorConfigOptions{
+//                                     .uuid = llfs::None,
+//                                     .max_attachments =
+//                                         32 /* TODO [tastolfi 2022-07-25] add config option */,
+//                                     .page_count = node_page_count,
+//                                     .log_device =
+//                                         llfs::CreateNewLogDeviceWithDefaultSize{
+//                                             .uuid = llfs::None,
+//                                             .pages_per_block_log2 = 1,
+//                                         },
+//                                     // TODO: [Gabe Bornstein 6/3/24] Use TreeOptions w/o default
+//                                     // values here.
+//                                     //
+//                                     .page_size_log2 =
+//                                         TreeOptions::with_default_values().node_size_log2(),
+//                                     .page_device = llfs::LinkToNewPageDevice{},
+//                                 },
+//                         },
+//                     .page_device =
+//                         llfs::CreateNewPageDevice{
+//                             .options =
+//                                 llfs::PageDeviceConfigOptions{
+//                                     .uuid = llfs::None,
+//                                     .device_id = llfs::None,
+//                                     .page_count = node_page_count,
+//                                     // TODO: [Gabe Bornstein 6/3/24] Use TreeOptions w/o default
+//                                     // values here.
+//                                     //
+//                                     .page_size_log2 =
+//                                         TreeOptions::with_default_values().node_size_log2(),
+//                                 },
+//                         },
+//                 });
+
+//         BATT_REQUIRE_OK(node_pool_config);
+
+//         // Add an arena for leaf pages.
+//         //
+//         llfs::StatusOr<llfs::FileOffsetPtr<const llfs::PackedPageArenaConfig&>> leaf_pool_config
+//         =
+//             builder.add_object(
+//                 llfs::PageArenaConfigOptions{
+//                     .uuid = None,
+//                     .page_allocator =
+//                         llfs::CreateNewPageAllocator{
+//                             .options =
+//                                 llfs::PageAllocatorConfigOptions{
+//                                     .uuid = llfs::None,
+//                                     .max_attachments =
+//                                         32 /* TODO [tastolfi 2022-07-25] add config option */,
+//                                     .page_count = leaf_page_count,
+//                                     .log_device =
+//                                         llfs::CreateNewLogDeviceWithDefaultSize{
+//                                             .uuid = llfs::None,
+//                                             .pages_per_block_log2 = 1,
+//                                         },
+//                                     // TODO: [Gabe Bornstein 6/3/24] Use TreeOptions w/o default
+//                                     // values here.
+//                                     //
+//                                     .page_size_log2 =
+//                                         TreeOptions::with_default_values().leaf_size_log2(),
+//                                     .page_device = llfs::LinkToNewPageDevice{},
+//                                 },
+//                         },
+//                     .page_device =
+//                         llfs::CreateNewPageDevice{
+//                             .options =
+//                                 llfs::PageDeviceConfigOptions{
+//                                     .uuid = llfs::None,
+//                                     .device_id = llfs::None,
+//                                     .page_count = leaf_page_count,
+//                                     // TODO: [Gabe Bornstein 6/3/24] Use TreeOptions w/o default
+//                                     // values here.
+//                                     //
+//                                     .page_size_log2 =
+//                                         TreeOptions::with_default_values().leaf_size_log2(),
+//                                 },
+//                         },
+//                 });
+
+//         BATT_REQUIRE_OK(leaf_pool_config);
+
+//         return OkStatus();
+//       });
+
+//   // Add Arenas to PageCache.
+//   //
+//   for (boost::uuids::uuid uuid : uuids) {
+//     batt::SharedPtr<StorageObjectInfo> p_object_info = storage_context.find_object_by_uuid(uuid);
+
+//     if (p_object_info->p_config_slot->tag == PackedConfigSlotBase::Tag::kPageArena) {
+//       const auto& packed_arena_config =
+//           config_slot_cast<PackedPageArenaConfig>(p_object_info->p_config_slot.object);
+
+//       const std::string base_name =
+//           batt::to_string("PageDevice_", packed_arena_config.page_device_uuid);
+
+//       StatusOr<PageArena> arena = storage_context.recover_object(
+//           batt::StaticType<PackedPageArenaConfig>{}, uuid,
+//           PageAllocatorRuntimeOptions{
+//               .scheduler = storage_context.get_scheduler(),
+//               .name = batt::to_string(base_name, "_Allocator"),
+//           },
+//           [&] {
+//             IoRingLogDriverOptions options;
+//             options.name = batt::to_string(base_name, "_AllocatorLog");
+//             return options;
+//           }(),
+//           IoRingFileRuntimeOptions{
+//               .io_ring = storage_context.get_io_ring(),
+//               .use_raw_io = true,
+//               .allow_read = true,
+//               .allow_write = true,
+//           });
+
+//       BATT_REQUIRE_OK(arena);
+
+//       batt::ScopedWriteLock<std::vector<std::unique_ptr<PageDeviceEntry>>> page_devices_lock{
+//           this->page_devices_};
+//       batt::ScopedWriteLock<std::vector<PageDeviceEntry*>> page_devices_by_size_lock{
+//           this->page_devices_by_page_size_};
+//       // batt::ScopedWriteLock<std::array<Slice<PageDeviceEntry* const>, kMaxPageSizeLog2>>
+//       //     page_devices_by_size_log2_lock{this->page_devices_by_page_size_log2_};
+
+//       // Create a slot pool for this page size if we haven't already done so.
+//       //
+//       if (!this->cache_slot_pool_by_page_size_log2_[page_size_log2]) {
+//         this->cache_slot_pool_by_page_size_log2_[page_size_log2] = PageCacheSlot::Pool::make_new(
+//             /*n_slots=*/this->options_.max_cached_pages_per_size_log2[page_size_log2],
+//             /*name=*/batt::to_string("size_", u64{1} << page_size_log2));
+//       }
+
+//       BATT_CHECK_EQ((*page_devices_lock)[device_id], nullptr)
+//           << "Duplicate entries found for the same device id!" << BATT_INSPECT(device_id);
+
+//       page_devices_lock->emplace_back(std::make_unique<PageDeviceEntry>(             //
+//           std::move(arena),                                                          //
+//           batt::make_copy(this->cache_slot_pool_by_page_size_log2_[page_size_log2])  //
+//           ));
+
+//       // TODO: [Gabe Bornstein 6/3/24] We'll need to sort page_devices_by_size_lock later.
+//       //
+//       page_devices_by_size_lock->emplace_back((*page_devices_lock)[device_id].get());
+//     }
+//   }
+// }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //

@@ -87,20 +87,22 @@ class StorageContext : public batt::RefCounted<StorageContext>
 
   // Adds an already existing file to this context.
   //
-  Status add_existing_named_file(std::string&& file_name, i64 start_offset = 0);
+  StatusOr<std::vector<boost::uuids::uuid>> add_existing_named_file(std::string&& file_name,
+                                                                    i64 start_offset = 0);
 
   // Creates a new file with the given name by invoking the passed `initializer` function to build
   // storage objects.
   //
   // If the initializer returns an error Status, then the file is not created.
   //
-  Status add_new_file(const std::string& file_name,
-                      const std::function<Status(StorageFileBuilder&)>& initializer);
+  StatusOr<std::vector<boost::uuids::uuid>> add_new_file(
+      const std::string& file_name, const std::function<Status(StorageFileBuilder&)>& initializer);
 
   // Adds an already existing file to this context; the file must have been scanned for metadata by
   // `read_storage_file`.
   //
-  Status add_existing_file(const batt::SharedPtr<StorageFile>& file);
+  StatusOr<std::vector<boost::uuids::uuid>> add_existing_file(
+      const batt::SharedPtr<StorageFile>& file);
 
   // Attempts to recover an object of a given type from this context by uuid.
   //

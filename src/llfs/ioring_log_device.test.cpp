@@ -62,7 +62,7 @@ TEST(IoringLogDeviceTest, StorageFile)
 
     // Create a log device file.
     //
-    batt::Status add_file_status = storage_context->add_new_file(
+    batt::StatusOr<std::vector<boost::uuids::uuid>> add_file_status = storage_context->add_new_file(
         kLogDeviceFilePath, [&](llfs::StorageFileBuilder& builder) -> batt::Status {
           BATT_REQUIRE_OK(builder.add_object(llfs::LogDeviceConfigOptions{
               .uuid = test_log_uuid,
