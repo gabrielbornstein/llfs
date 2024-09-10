@@ -116,6 +116,7 @@ Status StorageContext::increase_storage_capacity(
           << BATT_INSPECT(leaf_page_count);
 
   LOG(INFO) << "PAGE COUNT add_existing_file: " << node_page_count;
+
   // Create the page file.
   //
   Status page_file_status = this->add_new_file(
@@ -138,8 +139,8 @@ Status StorageContext::increase_storage_capacity(
                                     .log_device =
                                         llfs::CreateNewLogDevice2WithDefaultSize{
                                             .uuid = llfs::None,
-                                            .device_page_size_log2=None,
-                                            .data_alignment_log2=None,
+                                            .device_page_size_log2 = None,
+                                            .data_alignment_log2 = None,
                                         },
                                     .page_size_log2 = node_size_log2,
                                     .page_device = llfs::LinkToNewPageDevice{},
@@ -156,9 +157,7 @@ Status StorageContext::increase_storage_capacity(
                                 },
                         },
                 });
-
         BATT_REQUIRE_OK(node_pool_config);
-
         // Add an arena for leaf pages.
         //
         llfs::StatusOr<llfs::FileOffsetPtr<const llfs::PackedPageArenaConfig&>> leaf_pool_config =
@@ -175,8 +174,8 @@ Status StorageContext::increase_storage_capacity(
                                     .log_device =
                                         llfs::CreateNewLogDevice2WithDefaultSize{
                                             .uuid = llfs::None,
-                                            .device_page_size_log2=None,
-                                            .data_alignment_log2=None,
+                                            .device_page_size_log2 = None,
+                                            .data_alignment_log2 = None,
                                         },
                                     .page_size_log2 = leaf_size_log2,
                                     .page_device = llfs::LinkToNewPageDevice{},
@@ -312,7 +311,7 @@ StatusOr<batt::SharedPtr<PageCache>> StorageContext::get_page_cache()
 
   for (const auto& [uuid, p_object_info] : this->index_) {
     if (p_object_info->p_config_slot->tag == PackedConfigSlotBase::Tag::kPageArena) {
-        BATT_CHECK_OK(this->recover_arena(storage_pool, uuid, p_object_info));
+      BATT_CHECK_OK(this->recover_arena(storage_pool, uuid, p_object_info));
     }
   }
 

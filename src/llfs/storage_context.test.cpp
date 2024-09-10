@@ -58,69 +58,71 @@ class StorageContextTest : public ::testing::Test
     llfs::Status file_create_status = storage_context->add_new_file(
         storage_file_name, [&](llfs::StorageFileBuilder& builder) -> llfs::Status {
           llfs::StatusOr<llfs::FileOffsetPtr<const llfs::PackedPageArenaConfig&>> config_4kb =
-              builder.add_object(llfs::PageArenaConfigOptions{
-                  .uuid = arena_uuid_4kb,
-                  .page_allocator =
-                      llfs::CreateNewPageAllocator{
-                          .options =
-                              llfs::PageAllocatorConfigOptions{
-                                  .uuid = llfs::None,
-                                  .max_attachments = 32,
-                                  .page_count = llfs::PageCount{32},
-                                  .log_device =
-                                      llfs::CreateNewLogDevice2WithDefaultSize{
-                                          .uuid = llfs::None,
-                                          .device_page_size_log2 = llfs::None,
-                                          .data_alignment_log2 = llfs::None,
-                                      },
-                                  .page_size_log2 = llfs::PageSizeLog2{12},
-                                  .page_device = llfs::LinkToNewPageDevice{},
-                              },
-                      },
-                  .page_device =
-                      llfs::CreateNewPageDevice{
-                          .options =
-                              llfs::PageDeviceConfigOptions{
-                                  .uuid = llfs::None,
-                                  .device_id = llfs::None,
-                                  .page_count = llfs::PageCount{32},
-                                  .page_size_log2 = llfs::PageSizeLog2{12},
-                              },
-                      },
-              });
+              builder.add_object(
+                  llfs::PageArenaConfigOptions{
+                      .uuid = arena_uuid_4kb,
+                      .page_allocator =
+                          llfs::CreateNewPageAllocator{
+                              .options =
+                                  llfs::PageAllocatorConfigOptions{
+                                      .uuid = llfs::None,
+                                      .max_attachments = 32,
+                                      .page_count = llfs::PageCount{32},
+                                      .log_device =
+                                          llfs::CreateNewLogDevice2WithDefaultSize{
+                                              .uuid = llfs::None,
+                                              .device_page_size_log2 = llfs::None,
+                                              .data_alignment_log2 = llfs::None,
+                                          },
+                                      .page_size_log2 = llfs::PageSizeLog2{12},
+                                      .page_device = llfs::LinkToNewPageDevice{},
+                                  },
+                          },
+                      .page_device =
+                          llfs::CreateNewPageDevice{
+                              .options =
+                                  llfs::PageDeviceConfigOptions{
+                                      .uuid = llfs::None,
+                                      .device_id = llfs::None,
+                                      .page_count = llfs::PageCount{32},
+                                      .page_size_log2 = llfs::PageSizeLog2{12},
+                                  },
+                          },
+                  });
           BATT_REQUIRE_OK(config_4kb);
 
           llfs::StatusOr<llfs::FileOffsetPtr<const llfs::PackedPageArenaConfig&>> config_2mb =
-              builder.add_object(llfs::PageArenaConfigOptions{
-                  .uuid = arena_uuid_2mb,
-                  .page_allocator =
-                      llfs::CreateNewPageAllocator{
-                          .options =
-                              llfs::PageAllocatorConfigOptions{
-                                  .uuid = llfs::None,
-                                  .max_attachments = 32,
-                                  .page_count = llfs::PageCount{1},
-                                  .log_device =
-                                      llfs::CreateNewLogDevice2WithDefaultSize{
-                                          .uuid = llfs::None,
-                                          .device_page_size_log2 = llfs::None,
-                                          .data_alignment_log2 = llfs::None,
-                                      },
-                                  .page_size_log2 = llfs::PageSizeLog2{21},
-                                  .page_device = llfs::LinkToNewPageDevice{},
-                              },
-                      },
-                  .page_device =
-                      llfs::CreateNewPageDevice{
-                          .options =
-                              llfs::PageDeviceConfigOptions{
-                                  .uuid = llfs::None,
-                                  .device_id = llfs::None,
-                                  .page_count = llfs::PageCount{1},
-                                  .page_size_log2 = llfs::PageSizeLog2{21},
-                              },
-                      },
-              });
+              builder.add_object(
+                  llfs::PageArenaConfigOptions{
+                      .uuid = arena_uuid_2mb,
+                      .page_allocator =
+                          llfs::CreateNewPageAllocator{
+                              .options =
+                                  llfs::PageAllocatorConfigOptions{
+                                      .uuid = llfs::None,
+                                      .max_attachments = 32,
+                                      .page_count = llfs::PageCount{1},
+                                      .log_device =
+                                          llfs::CreateNewLogDevice2WithDefaultSize{
+                                              .uuid = llfs::None,
+                                              .device_page_size_log2 = llfs::None,
+                                              .data_alignment_log2 = llfs::None,
+                                          },
+                                      .page_size_log2 = llfs::PageSizeLog2{21},
+                                      .page_device = llfs::LinkToNewPageDevice{},
+                                  },
+                          },
+                      .page_device =
+                          llfs::CreateNewPageDevice{
+                              .options =
+                                  llfs::PageDeviceConfigOptions{
+                                      .uuid = llfs::None,
+                                      .device_id = llfs::None,
+                                      .page_count = llfs::PageCount{1},
+                                      .page_size_log2 = llfs::PageSizeLog2{21},
+                                  },
+                          },
+                  });
 
           BATT_REQUIRE_OK(config_2mb);
           return llfs::OkStatus();
@@ -208,28 +210,40 @@ TEST_F(StorageContextTest, RunOutOfMemory)
 
   u8 node_size_log2 = 12 /*4kb*/;
   u8 leaf_size_log2 = 21 /*2mb*/;
-  u8 num_storage_increases = 100;
+  int num_storage_increases = 1000;
   u8 num_pages_per_device = 1;
 
   llfs::StatusOr<batt::SharedPtr<llfs::PageCache>> cache = this->storage_context->get_page_cache();
 
-  std::thread new_page_thread([&] {
-    for (usize i = 0; i < num_pages_per_device * num_storage_increases; ++i) {
+  boost::asio::io_context io;
+
+  std::thread thread1{[&io] {
+    io.run();
+  }};
+
+  std::thread thread2{[&io] {
+    io.run();
+  }};
+
+  boost::asio::post(io.get_executor(), [&] {
+    for (int i = 0; i < num_pages_per_device * num_storage_increases; ++i) {
       LOG(INFO) << "new_page_thread start: " << i;
       std::unique_ptr<llfs::PageCacheJob> job1 = (*cache)->new_job();
       batt::StatusOr<std::shared_ptr<llfs::PageBuffer>> page1 =
           job1->new_page(llfs::PageSize{4096}, batt::WaitForResource::kFalse,
                          llfs::OpaquePageView::page_layout_id(), llfs::Caller::Unknown,
                          /*cancel_token=*/llfs::None);
+      BATT_CHECK_OK(page1);
       LOG(INFO) << "new_page_thread end: " << i;
     }
   });
 
-  std::thread increase_storage_capacity_thread([&] {
+  boost::asio::post(io.get_executor(), [&] {
     for (int i = 0; i < num_storage_increases + 1; ++i) {
       std::string file_name_str = file_name + batt::to_string(i) + file_extension;
       const char* storage_file_name = file_name_str.c_str();
-      LOG(INFO) << "increase_storage_capacity_thread start: " << i << " with file name: " << storage_file_name;
+      LOG(INFO) << "increase_storage_capacity_thread start: " << i
+                << " with file name: " << storage_file_name;
       llfs::delete_file(storage_file_name).IgnoreError();
       EXPECT_FALSE(std::filesystem::exists(std::filesystem::path{storage_file_name}));
 
@@ -254,8 +268,8 @@ TEST_F(StorageContextTest, RunOutOfMemory)
   llfs::PageCacheMetrics& metrics = (*cache)->metrics();
   LOG(INFO) << "metrics.get_page_view_count: " << metrics.get_page_view_count.load();
 
-  new_page_thread.join();
-  increase_storage_capacity_thread.join();
+  thread1.join();
+  thread2.join();
 }
 
 }  // namespace
