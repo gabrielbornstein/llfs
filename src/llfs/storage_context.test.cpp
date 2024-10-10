@@ -247,11 +247,15 @@ TEST_F(StorageContextTest, RunOutOfMemory)
       llfs::delete_file(storage_file_name).IgnoreError();
       EXPECT_FALSE(std::filesystem::exists(std::filesystem::path{storage_file_name}));
 
+      LOG(INFO) << "Percent of pages available before increase_storage_capacity(): " << (*cache)->percent_available_pages();
+
       BATT_CHECK_OK(this->storage_context->increase_storage_capacity(
           this->dir_name, 4096, llfs::PageSize{batt::checked_cast<u32>(u64{1} << leaf_size_log2)},
           llfs::PageSizeLog2{leaf_size_log2},
           llfs::PageSize{batt::checked_cast<u32>(u64{1} << node_size_log2)},
           llfs::PageSizeLog2{node_size_log2}, storage_file_name));
+
+      LOG(INFO) << "Percent of pages available after increase_storage_capacity(): " << (*cache)->percent_available_pages();
 
       ASSERT_TRUE(cache.ok()) << BATT_INSPECT(cache.status());
       ASSERT_NE(*cache, nullptr);

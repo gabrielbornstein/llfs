@@ -176,6 +176,11 @@ class PageAllocator
     return this->state_.no_lock().free_pool_size();
   }
 
+  u64 page_device_capacity() const
+  {
+    return this->state_.no_lock().page_device_capacity();
+  }
+
   page_device_id_int get_device_id() const
   {
     return this->state_.no_lock().page_ids().get_device_id();

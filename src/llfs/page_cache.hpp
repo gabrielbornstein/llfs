@@ -190,6 +190,8 @@ class PageCache : public PageLoader
 
   Status detach(const boost::uuids::uuid& user_id, slot_offset_type slot_offset);
 
+  double percent_available_pages();
+
   Slice<std::shared_ptr<const PageDeviceEntry>> devices_with_page_size_log2(usize size_log2);
 
   Slice<std::shared_ptr<const PageDeviceEntry>> devices_with_page_size(usize size);

@@ -410,6 +410,24 @@ std::vector<std::shared_ptr<const PageCache::PageDeviceEntry>> PageCache::all_de
   return devices;
 }
 
+// TODO: [Gabe Bornstein 10/9/24] Do we want a version of this function that returns % of available
+// pages per different sized pages?
+//
+double PageCache::percent_available_pages()
+{
+  int total_num_pages_available = 0;
+  int total_num_pages = 0;
+
+  batt::ScopedWriteLock<State> state(this->state_);
+  for (auto page_device_entry : state->page_devices) {
+    total_num_pages_available += page_device_entry->arena.allocator().free_pool_size();
+    total_num_pages += page_device_entry->arena.allocator().page_device_capacity();
+  }
+  LOG(INFO) << "total_num_pages_available: " << total_num_pages_available
+            << ", total_num_pages: " << total_num_pages;
+  return static_cast<double>(total_num_pages_available) / total_num_pages;
+}
+
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 Slice<std::shared_ptr<const PageCache::PageDeviceEntry>> PageCache::devices_with_page_size(
