@@ -170,14 +170,15 @@ void PageCacheSlot::extend_pin() noexcept
 //
 void PageCacheSlot::update_latest_use() noexcept
 {
-  this->latest_use_.store(LRUClock::advance_local());
+  this->latest_use_.store(LRUClock::advance_local() + this->obsolete_.load());
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 void PageCacheSlot::set_obsolete_hint() noexcept
 {
-  this->latest_use_.store(LRUClock::read_global() - (i64{1} << 56));
+  this->obsolete_.store(kObsoletePenalty);
+  this->update_latest_use();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -291,6 +292,7 @@ auto PageCacheSlot::fill(PageId key) noexcept -> PinnedRef
 
   this->key_ = key;
   this->value_.emplace();
+  this->obsolete_.store(0);
   this->update_latest_use();
 
   auto observed_state = this->state_.fetch_add(kPinCountDelta) + kPinCountDelta;
@@ -311,6 +313,7 @@ void PageCacheSlot::clear() noexcept
 
   this->key_ = PageId{};
   this->value_ = None;
+  this->obsolete_.store(0);
   this->set_valid();
 }
 

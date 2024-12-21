@@ -13,26 +13,6 @@
 
 namespace llfs {
 
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-bool bool_from(PinPageToJob pin_page, bool default_value)
-{
-  switch (pin_page) {
-    case PinPageToJob::kFalse:
-      return false;
-
-    case PinPageToJob::kTrue:
-      return true;
-
-    case PinPageToJob::kDefault:
-      return default_value;
-
-    default:
-      BATT_PANIC() << "bad value for pin_page: " << (int)pin_page;
-      BATT_UNREACHABLE();
-  }
-}
-
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 // class PageLoader
 

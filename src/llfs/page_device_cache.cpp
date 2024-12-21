@@ -144,9 +144,9 @@ batt::StatusOr<PageCacheSlot::PinnedRef> PageDeviceCache::find_or_insert(
   //
   initialize(new_slot->pinned_ref);
 
-  // Done! (Inserted new value)
+  // Done! (Admitted new value)
   //
-  this->metrics().insert_count.fetch_add(1);
+  this->metrics().admit_count.fetch_add(1);
   return {std::move(new_slot->pinned_ref)};
 }
 

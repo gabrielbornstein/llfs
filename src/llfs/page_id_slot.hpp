@@ -14,6 +14,7 @@
 #include <llfs/page_cache_slot.hpp>
 #include <llfs/page_id.hpp>
 #include <llfs/page_layout_id.hpp>
+#include <llfs/pin_page_to_job.hpp>
 
 #include <llfs/metrics.hpp>
 
@@ -27,16 +28,6 @@ namespace llfs {
 class PageView;
 class PinnedPage;
 class PageLoader;
-
-enum struct PinPageToJob : u8 {
-  kFalse = 0,
-  kTrue = 1,
-  kDefault = 2,
-};
-
-// Convert `pin_page` to a boolean value.
-//
-bool bool_from(PinPageToJob pin_page, bool default_value);
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 // A PageId and a weak cache slot reference; speeds up lookup for pages that are in-cache.

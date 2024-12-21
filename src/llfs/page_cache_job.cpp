@@ -65,6 +65,8 @@ PageCacheJob::~PageCacheJob()
 {
   job_destroy_count.fetch_add(1);
 
+  delete this->obsolete_pages_.load();
+
   BATT_CHECK_EQ(0, binder_count);
 }
 
@@ -130,8 +132,12 @@ StatusOr<std::shared_ptr<PageBuffer>> PageCacheJob::new_page(
 void PageCacheJob::pin(PinnedPage&& pinned_page)
 {
   const PageId id = pinned_page->page_id();
-  const bool inserted = this->pinned_.emplace(id, std::move(pinned_page)).second;
-  (void)inserted;
+  [[maybe_unused]] const bool inserted = this->pinned_
+                                             .emplace(id,
+                                                      PinState{
+                                                          .pinned_page = std::move(pinned_page),
+                                                      })
+                                             .second;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -183,28 +189,37 @@ StatusOr<PinnedPage> PageCacheJob::pin_new_impl(
                                   callers | Caller::PageCacheJob_pin_new, this->job_id);
   });
 
+  LLFS_LOG_INFO_IF(this->debug_mask.test(kDebugLogCacheSlotsFull) && !pinned_page.ok() &&
+                   pinned_page.status() == ::llfs::make_status(StatusCode::kCacheSlotsFull))
+      << "Failed to pin new page (cache slots full)\n"
+      << boost::stacktrace::stacktrace{};
+
   BATT_REQUIRE_OK(pinned_page) << batt::LogLevel::kInfo << "Failed to pin page " << id
                                << ", reason: " << pinned_page.status()
                                << BATT_INSPECT(page_view->get_page_layout_id());
 
   // Add to the pinned set.
   //
-  this->pinned_.emplace(id, *pinned_page);
+  this->pinned_.emplace(id, PinState{
+                                .pinned_page = *pinned_page,
+                            });
 
   return pinned_page;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-void PageCacheJob::pin_new_if_needed(PageId page_id,
-                                     std::function<std::shared_ptr<PageView>()>&& pin_page_fn,
+void PageCacheJob::pin_new_if_needed(PageId page_id, DeferredNewPageFn&& deferred_new_page_fn,
                                      u64 /*callers - TODO [tastolfi 2021-12-03] */)
 {
   BATT_CHECK(this->is_page_new(page_id));
   BATT_CHECK_EQ(this->deferred_new_pages_.count(page_id), 0u);
 
   this->pruned_ = false;
-  this->deferred_new_pages_.emplace(page_id, std::move(pin_page_fn));
+  this->deferred_new_pages_.emplace(page_id,
+                                    DeferredPinState{
+                                        .deferred_new_page_fn = std::move(deferred_new_page_fn),
+                                    });
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -219,6 +234,9 @@ void PageCacheJob::unpin(PageId id)
 //
 void PageCacheJob::unpin_all()
 {
+  LLFS_LOG_INFO_IF(this->debug_mask.test(kDebugLogUnpinAll))
+      << "PageCacheJob::unpin_all()" << boost::stacktrace::stacktrace{};
+
   batt::SmallVec<PageId, 64> to_unpin;
   for (auto& [page_id, pinned_page] : this->pinned_) {
     if (!this->is_page_new(page_id)) {
@@ -239,7 +257,7 @@ StatusOr<PinnedPage> PageCacheJob::get_page_with_layout_in_job(
 {
   // First check in the pinned pages table.
   {
-    Optional<PinnedPage> already_pinned = this->get_already_pinned(page_id);
+    Optional<PinnedPage> already_pinned = this->get_already_pinned(page_id, pin_page_to_job);
     if (already_pinned) {
       return std::move(*already_pinned);
     }
@@ -254,8 +272,10 @@ StatusOr<PinnedPage> PageCacheJob::get_page_with_layout_in_job(
       if (!new_page.has_view()) {
         auto iter2 = this->deferred_new_pages_.find(page_id);
         if (iter2 != this->deferred_new_pages_.end()) {
-          auto build_page_fn = std::move(iter2->second);
+          DeferredNewPageFn build_page_fn = std::move(iter2->second.deferred_new_page_fn);
+
           this->deferred_new_pages_.erase(iter2);
+
           return this->pin_new(std::move(build_page_fn)(), Caller::Unknown);
         }
       }
@@ -272,14 +292,41 @@ StatusOr<PinnedPage> PageCacheJob::get_page_with_layout_in_job(
     }
   }
 
+  static const batt::ExponentialBackoff retry_policy{
+      .max_attempts = 1000,
+      .initial_delay_usec = 100,
+      .backoff_factor = 72,
+      .backoff_divisor = 71,
+      .max_delay_usec = 100 * 1000,
+  };
+
   // Fall back on the cache or base job if it is available.
   //
-  auto pinned_page = this->const_get(page_id, required_layout, ok_if_not_found);
+  StatusOr<PinnedPage> pinned_page = batt::with_retry_policy(
+      retry_policy, /*op_name=*/"PageCacheJob::get_page",
+      /*op=*/
+      [&] {
+        return this->const_get(page_id, required_layout, ok_if_not_found);
+      },
+      batt::TaskSleepImpl{},
+      /*is_retryable_status=*/
+      [](const batt::Status& status) {
+        return batt::status_is_retryable(status) ||
+               (status == ::llfs::make_status(StatusCode::kCacheSlotsFull));
+      });
+
+  LLFS_LOG_INFO_IF(this->debug_mask.test(kDebugLogCacheSlotsFull) && !pinned_page.ok() &&
+                   pinned_page.status() == ::llfs::make_status(StatusCode::kCacheSlotsFull))
+      << "Failed to pin page (cache slots full)\n"
+      << boost::stacktrace::stacktrace{};
 
   // If successful and the caller has asked us to do so, pin the page to the job.
   //
   if (pinned_page.ok() && bool_from(pin_page_to_job, /*default_value=*/true)) {
     this->pin(batt::make_copy(*pinned_page));
+  } else {
+    LLFS_LOG_INFO_IF(this->debug_mask.test(kDebugLogLoadUnpinned))
+        << BATT_INSPECT(page_id) << "PageCacheJob::unpin_all()" << boost::stacktrace::stacktrace{};
   }
 
   return pinned_page;
@@ -291,9 +338,16 @@ Optional<PinnedPage> PageCacheJob::get_already_pinned(PageId page_id) const
 {
   auto iter = this->pinned_.find(page_id);
   if (iter != this->pinned_.end()) {
-    return iter->second;
+    return iter->second.pinned_page;
   }
   return None;
+}
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Optional<PinnedPage> PageCacheJob::get_already_pinned(PageId page_id,
+                                                      PinPageToJob pin_page_to_job [[maybe_unused]])
+{
+  return const_cast<const PageCacheJob*>(this)->get_already_pinned(page_id);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -399,11 +453,47 @@ void PageCacheJob::update_root_set(const PageRefCount& prc)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+void PageCacheJob::hint_obsolete(const PinnedPage& pinned_page) noexcept
+{
+  this->hint_obsolete(PageIdSlot::from_pinned_page(pinned_page));
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void PageCacheJob::hint_obsolete(const PageIdSlot& page_id_slot) noexcept
+{
+  this->obsolete_pages_.load()->push_back(page_id_slot);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void PageCacheJob::apply_obsolete_hints() const noexcept
+{
+  auto* local_obsolete_pages =
+      this->obsolete_pages_.exchange(new batt::SmallVec<PageIdSlot, kObsoletePagesPreallocCount>{});
+  auto on_scope_exit = batt::finally([&] {
+    delete local_obsolete_pages;
+  });
+
+  for (PageIdSlot& page_id_slot : *local_obsolete_pages) {
+    StatusOr<PinnedPage> pinned_page = page_id_slot.try_pin();
+    if (!pinned_page.ok()) {
+      continue;
+    }
+    pinned_page->hint_obsolete();
+  }
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 StatusOr<usize> PageCacheJob::prune(u64 callers)
 {
   if (this->pruned_) {
     return 0;
   }
+
+  LLFS_LOG_INFO_IF(this->debug_mask.test(kDebugLogPrune)) << "PageCacheJob::prune\n"
+                                                          << boost::stacktrace::stacktrace{};
 
   // Initially all new pages are in the `to_prune` set.
   //

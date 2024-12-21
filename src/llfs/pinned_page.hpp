@@ -28,8 +28,6 @@ class PageView;
 //
 class PinnedPage
 {
-  using PinnedCacheSlotT = PageCacheSlot::PinnedRef;
-
  public:
   PinnedPage() = default;
 
@@ -37,7 +35,8 @@ class PinnedPage
   {
   }
 
-  explicit PinnedPage(const PageView* page_view, PinnedCacheSlotT&& pinned_cache_slot) noexcept
+  explicit PinnedPage(const PageView* page_view,
+                      PageCacheSlot::PinnedRef&& pinned_cache_slot) noexcept
       : page_view_{page_view}
       , pinned_cache_slot_{std::move(pinned_cache_slot)}
   {
@@ -83,7 +82,7 @@ class PinnedPage
     return this->get() != nullptr;
   }
 
-  PinnedCacheSlotT get_cache_slot() const noexcept
+  PageCacheSlot::PinnedRef get_cache_slot() const noexcept
   {
     return this->pinned_cache_slot_;
   }
@@ -114,7 +113,7 @@ class PinnedPage
 
  private:
   const PageView* page_view_ = nullptr;
-  PinnedCacheSlotT pinned_cache_slot_;
+  PageCacheSlot::PinnedRef pinned_cache_slot_;
 };
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

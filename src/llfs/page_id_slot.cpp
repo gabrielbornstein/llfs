@@ -21,7 +21,7 @@ namespace llfs {
 {
   return Self{
       .page_id = pinned->page_id(),
-      .cache_slot_ref = pinned.get_cache_slot(),
+      .cache_slot_ref = PageCacheSlot::AtomicRef{pinned.get_cache_slot()},
   };
 }
 

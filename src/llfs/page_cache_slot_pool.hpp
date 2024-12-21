@@ -11,6 +11,7 @@
 #endif
 
 #include <llfs/metrics.hpp>
+#include <llfs/optional.hpp>
 
 namespace llfs {
 
@@ -38,17 +39,26 @@ class PageCacheSlot::Pool : public boost::intrusive_ref_counter<Pool>
   /** \brief Observability metrics for a cache slot pool.
    */
   struct Metrics {
-    CountMetric<u64> max_slots{0};
-    CountMetric<u64> indexed_slots{0};
-    CountMetric<u64> query_count{0};
-    CountMetric<u64> hit_count{0};
-    CountMetric<u64> stale_count{0};
-    CountMetric<u64> alloc_count{0};
-    CountMetric<u64> evict_count{0};
-    CountMetric<u64> insert_count{0};
-    CountMetric<u64> erase_count{0};
-    CountMetric<u64> full_count{0};
+    CountMetric<i64> max_slots{0};
+    CountMetric<i64> indexed_slots{0};
+    CountMetric<i64> query_count{0};
+    CountMetric<i64> hit_count{0};
+    CountMetric<i64> stale_count{0};
+    CountMetric<i64> alloc_count{0};
+    CountMetric<i64> evict_count{0};
+    CountMetric<i64> admit_count{0};
+    CountMetric<i64> insert_count{0};
+    CountMetric<i64> miss_count{0};
+    CountMetric<i64> erase_count{0};
+    CountMetric<i64> full_count{0};
   };
+
+  /** \brief Returns the default number of random eviction candidates to consider.
+   *
+   * Read from env var LLFS_CACHE_EVICTION_CANDIDATES if defined; otherwise
+   * kDefaultEvictionCandidates is returned.
+   */
+  static usize default_eviction_candidate_count() noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -110,7 +120,7 @@ class PageCacheSlot::Pool : public boost::intrusive_ref_counter<Pool>
   /** \brief Constructs a new Pool with capacity for `n_slots` cached pages.
    */
   explicit Pool(usize n_slots, std::string&& name,
-                usize eviction_candidates = Self::kDefaultEvictionCandidates) noexcept;
+                Optional<usize> eviction_candidates = None) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 

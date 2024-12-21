@@ -95,6 +95,15 @@ class PageCacheSlot
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  /** \brief When a page is hinted/marked as `obsolete`, this number is added to the LRU logical
+   * time stamp when determining which slot to evict under pressure.
+   *
+   * The obsolete penality is cleared when `clear()` or `fill()` is called.
+   */
+  static constexpr i64 kObsoletePenalty = -(i64{1} << 56);
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
   // Forward-declarations of member types.
   //
   class Pool;       // defined in <llfs/page_cache_slot_pool.hpp>
@@ -300,6 +309,7 @@ class PageCacheSlot
   std::atomic<u64> state_{0};
   std::atomic<u64> ref_count_{0};
   std::atomic<i64> latest_use_{0};
+  std::atomic<i64> obsolete_{0};
 };
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------

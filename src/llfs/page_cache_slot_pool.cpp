@@ -9,16 +9,30 @@
 #include <llfs/page_cache_slot.hpp>
 //
 
+#include <batteries/env.hpp>
+
 #include <random>
 
 namespace llfs {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+/*static*/ usize PageCacheSlot::Pool::default_eviction_candidate_count() noexcept
+{
+  static const usize value_ = batt::getenv_as<usize>("LLFS_CACHE_EVICTION_CANDIDATES")
+                                  .value_or(Self::kDefaultEvictionCandidates);
+
+  return value_;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 /*explicit*/ PageCacheSlot::Pool::Pool(usize n_slots, std::string&& name,
-                                       usize eviction_candidates) noexcept
+                                       Optional<usize> eviction_candidates) noexcept
     : n_slots_{n_slots}
-    , eviction_candidates_{std::min<usize>(n_slots, std::max<usize>(2, eviction_candidates))}
+    , eviction_candidates_{std::min<usize>(
+          n_slots, std::max<usize>(
+                       2, eviction_candidates.value_or(Self::default_eviction_candidate_count())))}
     , name_{std::move(name)}
     , slot_storage_{new SlotStorage[n_slots]}
 {

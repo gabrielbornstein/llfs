@@ -133,7 +133,9 @@ TEST(CacheTest, Basic)
   // Test PinnedSlot move assign to self.
   //
   BATT_SUPPRESS_IF_CLANG("-Wself-move")
+  BATT_SUPPRESS_IF_GCC("-Wself-move")
   slot2_copy4 = std::move(slot2_copy4);
+  BATT_UNSUPPRESS_IF_GCC()
   BATT_UNSUPPRESS_IF_CLANG()
 
   EXPECT_TRUE(slot2_copy4);

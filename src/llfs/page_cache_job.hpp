@@ -21,6 +21,7 @@
 
 #include <batteries/async/backoff.hpp>
 
+#include <bitset>
 #include <functional>
 #include <memory>
 #include <unordered_map>
@@ -40,6 +41,16 @@ class PageCacheJob : public PageLoader
   // A function to build a page when it is first requested.
   //
   using DeferredNewPageFn = std::function<std::shared_ptr<PageView>()>;
+
+  enum DebugMaskIndex {
+    kDebugLogLoadUnpinned = 0,
+    kDebugLogUnpinAll = 1,
+    kDebugLogPrune = 2,
+    kDebugLogCacheSlotsFull = 3,
+    kDebugMaskSize
+  };
+
+  using DebugMask = std::bitset<kDebugMaskSize>;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
   // A lazily-built new page in the context of this job.
@@ -84,6 +95,8 @@ class PageCacheJob : public PageLoader
 
   static usize n_jobs_count();
 
+  static constexpr usize kObsoletePagesPreallocCount = 256;
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   const u64 job_id = counter().fetch_add(1);
@@ -96,6 +109,8 @@ class PageCacheJob : public PageLoader
   explicit PageCacheJob(PageCache* cache) noexcept;
 
   ~PageCacheJob();
+
+  DebugMask debug_mask;
 
   PageCache& cache() const noexcept
   {
@@ -149,7 +164,7 @@ class PageCacheJob : public PageLoader
   StatusOr<PinnedPage> pin_new_with_retry(std::shared_ptr<PageView>&& page_view, u64 callers,
                                           RetryPolicy&& retry_policy)
   {
-    return this->pin_new_impl(
+    StatusOr<PinnedPage> pinned_page = this->pin_new_impl(
         std::move(page_view), callers, [&retry_policy](const auto& op) -> StatusOr<PinnedPage> {
           return batt::with_retry_policy(
               retry_policy, /*op_name=*/"PageCacheJob::pin_new() - Cache::put_view", op,
@@ -159,6 +174,8 @@ class PageCacheJob : public PageLoader
                        (status == ::llfs::make_status(StatusCode::kCacheSlotsFull));
               });
         });
+
+    return pinned_page;
   }
 
   // Register a previously allocated page (returned by `this->new_page`) to be pinned the first time
@@ -220,6 +237,8 @@ class PageCacheJob : public PageLoader
 
   Optional<PinnedPage> get_already_pinned(PageId page_id) const;
 
+  Optional<PinnedPage> get_already_pinned(PageId page_id, PinPageToJob pin_page_to_job);
+
   void const_prefetch_hint(PageId page_id) const;
 
   StatusOr<PinnedPage> const_get(PageId page_id, const Optional<PageLayoutId>& required_layout,
@@ -246,6 +265,18 @@ class PageCacheJob : public PageLoader
   // TODO [tastolfi 2022-01-04] document me
   //
   void update_root_set(const PageRefCount& prc);
+
+  /** \brief Adds a hint that the specified page will be made obsolete by this job.
+   */
+  void hint_obsolete(const PinnedPage& page) noexcept;
+
+  /** \brief Adds a hint that the specified page will be made obsolete by this job.
+   */
+  void hint_obsolete(const PageIdSlot& page_id_slot) noexcept;
+
+  /** \brief Applies all obsolete hints to pages still in cache.
+   */
+  void apply_obsolete_hints() const noexcept;
 
   // unpin and purge all new pages that aren't reachable from the root set.  Return the number of
   // pages pruned from the job.
@@ -322,15 +353,29 @@ class PageCacheJob : public PageLoader
 
   int binder_count = 0;
 
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
+  struct PinState {
+    PinnedPage pinned_page;
+  };
+
+  struct DeferredPinState {
+    DeferredNewPageFn deferred_new_page_fn;
+  };
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
   PageCache* const cache_;
-  std::unordered_map<PageId, PinnedPage, PageId::Hash> pinned_;
+  std::unordered_map<PageId, PinState, PageId::Hash> pinned_;
   std::unordered_map<PageId, NewPage, PageId::Hash> new_pages_;
   std::unordered_set<PageId, PageId::Hash> deleted_pages_;
   std::unordered_map<PageId, i32, PageId::Hash> root_set_delta_;
-  std::unordered_map<PageId, std::function<auto()->std::shared_ptr<PageView>>, PageId::Hash>
-      deferred_new_pages_;
+  std::unordered_map<PageId, DeferredPinState, PageId::Hash> deferred_new_pages_;
   std::unordered_set<PageId, PageId::Hash> recovered_pages_;
+  mutable std::atomic<batt::SmallVec<PageIdSlot, kObsoletePagesPreallocCount>*> obsolete_pages_{
+      new batt::SmallVec<PageIdSlot, kObsoletePagesPreallocCount>{}};
   bool pruned_ = false;
   std::ostringstream debug_;
   FinalizedPageCacheJob base_job_;

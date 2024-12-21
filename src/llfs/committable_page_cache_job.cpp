@@ -277,6 +277,11 @@ Status CommittablePageCacheJob::commit_impl(const JobCommitParams& params, u64 c
   Status drop_status = this->drop_deleted_pages(callers);
   BATT_REQUIRE_OK(drop_status);
 
+  // Finally, apply obsolete page cache hints.  We wait until the last possible moment to do this in
+  // case some other workload is accessing the "obsolete" pages.
+  //
+  job->apply_obsolete_hints();
+
   LLFS_VLOG(1) << "commit(PageCacheJob): done";
 
   success = true;
@@ -423,8 +428,8 @@ Status CommittablePageCacheJob::WriteNewPagesContext::await_finish()
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 auto CommittablePageCacheJob::start_ref_count_updates(const JobCommitParams& params,
-                                                      PageRefCountUpdates& updates, u64 /*callers*/)
-    -> StatusOr<DeadPages>
+                                                      PageRefCountUpdates& updates,
+                                                      u64 /*callers*/) -> StatusOr<DeadPages>
 {
   LLFS_VLOG(1) << "commit(PageCacheJob): updating ref counts";
 

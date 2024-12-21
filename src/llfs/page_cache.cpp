@@ -493,8 +493,9 @@ StatusOr<PinnedPage> PageCache::put_view(std::shared_ptr<const PageView>&& view,
 
   // Attempt to insert the new page view into the cache.
   //
-  batt::StatusOr<PageCacheSlot::PinnedRef> pinned_cache_slot =
-      entry->cache.find_or_insert(page_id, [&view](const PageCacheSlot::PinnedRef& pinned_ref) {
+  batt::StatusOr<PageCacheSlot::PinnedRef> pinned_cache_slot = entry->cache.find_or_insert(
+      page_id, [&entry, &view](const PageCacheSlot::PinnedRef& pinned_ref) {
+        entry->cache.metrics().insert_count.add(1);
         pinned_ref->set_value(std::move(view));
       });
 
@@ -590,6 +591,7 @@ auto PageCache::find_page_in_cache(PageId page_id, const Optional<PageLayoutId>&
   BATT_CHECK_NOT_NULLPTR(entry);
 
   return entry->cache.find_or_insert(page_id, [&](const PageCacheSlot::PinnedRef& pinned_slot) {
+    entry->cache.metrics().miss_count.add(1);
     this->async_load_page_into_slot(pinned_slot, required_layout, ok_if_not_found);
   });
 }
