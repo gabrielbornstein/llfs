@@ -11,7 +11,7 @@ project(LLFS CXX)
 
 # Enable link-time optimization. NOTE: currently breaks arm64 Linux (M1)
 #
-set(CMAKE_INTERPROCEDURAL_OPTIMIZATION FALSE)
+set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
 
 # The src dir should appear in the include path.
 #
@@ -62,6 +62,10 @@ add_compile_definitions(_BITS_UIO_EXT_H=1)
 
 set (CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -fno-omit-frame-pointer")
 set (CMAKE_LINKER_FLAGS_DEBUG "${CMAKE_LINKER_FLAGS_DEBUG} -fno-omit-frame-pointer")
+
+message("(before) CMAKE_CXX_FLAGS_RELEASE=${CMAKE_CXX_FLAGS_RELEASE}")
+set (CMAKE_CXX_FLAGS_RELEASE  "-O3 -DNDEBUG -march=native")
+message("(after)  CMAKE_CXX_FLAGS_RELEASE=${CMAKE_CXX_FLAGS_RELEASE}")
 
 set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-omit-frame-pointer")
 set (CMAKE_LINKER_FLAGS "${CMAKE_LINKER_FLAGS} -fno-omit-frame-pointer")

@@ -100,7 +100,7 @@ TEST(BloomFilterTest, RandomItems)
       const double actual_bit_rate = double(filter->word_count() * 64) / double(items.size());
 
       LLFS_VLOG(1) << BATT_INSPECT(n_items) << " (target)" << BATT_INSPECT(bits_per_item)
-                   << BATT_INSPECT(filter->word_count_mask) << BATT_INSPECT(filter->hash_count)
+                   << BATT_INSPECT(filter->word_count()) << BATT_INSPECT(filter->hash_count)
                    << " bit_rate == " << actual_bit_rate;
 
       {

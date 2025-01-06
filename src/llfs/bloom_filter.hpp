@@ -133,10 +133,9 @@ inline double optimal_bloom_filter_bit_rate(double target_false_positive_P)
 }
 
 struct PackedBloomFilter {
-  // The size of the filter in 64-bit words, minus 1.  The word_count (== word_count_mask + 1) MUST
-  // be a power of 2.
+  // The size of the filter in 64-bit words.
   //
-  little_u64 word_count_mask;
+  little_u64 word_count_;
 
   // The number of hash functions used.
   //
@@ -184,13 +183,13 @@ struct PackedBloomFilter {
     const usize num_words = word_count_from_bit_count(params.bits_per_item * item_count);
     const usize filter_bit_count = num_words * 64;
 
-    this->word_count_mask = num_words - 1;
+    this->word_count_ = num_words;
     this->hash_count = optimal_hash_count(filter_bit_count, item_count);
   }
 
   u64 index_from_hash(u64 hash_val) const
   {
-    return (hash_val >> 6) & this->word_count_mask.value();
+    return (hash_val >> 6) % this->word_count();
   }
 
   static constexpr u64 bit_mask_from_hash(u64 hash_val)
@@ -220,12 +219,12 @@ struct PackedBloomFilter {
 
   void clear()
   {
-    std::memset(this->words, 0, sizeof(little_u64) * (this->word_count_mask + 1));
+    std::memset(this->words, 0, sizeof(little_u64) * this->word_count());
   }
 
   usize word_count() const
   {
-    return this->word_count_mask + 1;
+    return this->word_count_;
   }
 
   batt::Slice<const little_u64> get_words() const
@@ -238,7 +237,7 @@ BATT_STATIC_ASSERT_EQ(sizeof(PackedBloomFilter), 24);
 
 inline usize packed_sizeof(const PackedBloomFilter& filter)
 {
-  return sizeof(PackedBloomFilter) + sizeof(little_u64) * filter.word_count_mask;
+  return sizeof(PackedBloomFilter) + sizeof(little_u64) * filter.word_count_;
 }
 
 inline usize packed_sizeof_bloom_filter(const BloomFilterParams& params, usize item_count)
@@ -273,7 +272,7 @@ void parallel_build_bloom_filter(batt::WorkerPool& worker_pool, Iter first, Iter
     u8* ptr = temp_memory.get();
     for (usize i = 0; i < n_input_shards; ++i, ptr += filter_size) {
       auto* partial = reinterpret_cast<PackedBloomFilter*>(ptr);
-      partial->word_count_mask = filter->word_count_mask;
+      partial->word_count_ = filter->word_count_;
       partial->hash_count = filter->hash_count;
       temp_filters.emplace_back(partial);
     }
