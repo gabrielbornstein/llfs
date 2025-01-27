@@ -11,7 +11,7 @@ project(LLFS CXX)
 
 # Enable link-time optimization. NOTE: currently breaks arm64 Linux (M1)
 #
-set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+set(CMAKE_INTERPROCEDURAL_OPTIMIZATION FALSE)
 
 # The src dir should appear in the include path.
 #

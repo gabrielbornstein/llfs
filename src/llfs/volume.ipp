@@ -13,6 +13,8 @@
 #include <llfs/buffered_log_data_reader.hpp>
 #include <llfs/volume_slot_demuxer.hpp>
 
+#include <boost/asio/buffer.hpp>
+
 namespace llfs {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -27,18 +29,34 @@ inline StatusOr<TypedVolumeReader<T>> Volume::typed_reader(const SlotRangeSpec& 
   return TypedVolumeReader<T>{std::move(*reader)};
 }
 
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 template <typename T>
 u64 Volume::calculate_grant_size(const T& payload) const
 {
   return packed_sizeof_slot(payload);
 }
 
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 template <typename T>
 StatusOr<SlotRange> Volume::append(const T& payload, batt::Grant& grant)
 {
   llfs::PackObjectAsRawData<const T&> packed_obj_as_raw{payload};
 
   return this->slot_writer_->append(grant, packed_obj_as_raw);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+template <typename ConstBufferSequence>
+inline StatusOr<SlotRange> Volume::direct_append(const ConstBufferSequence& data,
+                                                 batt::Grant& grant) noexcept
+{
+  static_assert(boost::asio::is_const_buffer_sequence<ConstBufferSequence>{},
+                "Parameter `data` must satisfy the type requirements of ConstBufferSequence");
+
+  return this->slot_writer_->direct_append(grant, data);
 }
 
 }  // namespace llfs

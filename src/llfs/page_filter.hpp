@@ -18,6 +18,8 @@
 
 namespace llfs {
 
+class PinnedPage;
+
 class PageFilter
 {
  public:

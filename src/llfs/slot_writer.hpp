@@ -108,6 +108,44 @@ class SlotWriter
     return this->log_device_.sync(mode, event);
   }
 
+  /** \brief Appends raw, pre-formatted data directly to the log.
+   */
+  template <typename ConstBufferSequence>
+  StatusOr<SlotRange> direct_append(batt::Grant& grant, const ConstBufferSequence& data) noexcept
+  {
+    const usize total_size = boost::asio::buffer_size(data);
+    BATT_ASSIGN_OK_RESULT(batt::Grant spent_grant, grant.spend(total_size));
+
+    // We will cancel this FinalAct on successful completion of this operation below.
+    //
+    auto revert_spend = batt::finally([&] {
+      // Something went wrong... undo the spend.
+      //
+      grant.subsume(std::move(spent_grant));
+    });
+
+    SlotRange result;
+    {
+      batt::ScopedLock<LogDevice::Writer*> locked_log_writer{this->log_writer_};
+
+      result.lower_bound = (*locked_log_writer)->slot_offset();
+
+      BATT_ASSIGN_OK_RESULT(MutableBuffer log_buffer,
+                            (*locked_log_writer)->prepare(total_size, /*head_room=*/0));
+
+      boost::asio::buffer_copy(log_buffer, data);
+
+      BATT_ASSIGN_OK_RESULT(result.upper_bound, (*locked_log_writer)->commit(total_size));
+
+      BATT_CHECK_EQ(BATT_CHECKED_CAST(usize, result.size()), total_size);
+    }
+    revert_spend.cancel();
+    this->in_use_.subsume(std::move(spent_grant));
+
+    return result;
+  }
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
   LogDevice& log_device_;
 
@@ -226,6 +264,19 @@ inline usize packed_sizeof_slot(const T& payload)
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //
+/** \brief The result of formatting a slot to a buffer.
+ *
+ * The destination buffer is *not* necessarily a LogDevice buffer, so SlotRange is not yet known.
+ */
+template <typename PackedT>
+struct FormatSlotResult {
+  ConstBuffer slot_data;
+  PackedT* packed_payload;
+  MutableBuffer unused_buffer;
+};
+
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+//
 template <typename T>
 class TypedSlotWriter;
 
@@ -235,6 +286,8 @@ class TypedSlotWriter<PackedVariant<Ts...>> : public SlotWriter
  public:
   using SlotWriter::SlotWriter;
 
+  using Self = TypedSlotWriter;
+
   struct NullPostCommitFn {
     using result_type = StatusOr<SlotRange>;
 
@@ -243,6 +296,73 @@ class TypedSlotWriter<PackedVariant<Ts...>> : public SlotWriter
       return slot_range;
     }
   };
+
+  /** \brief Formats a slot payload (with NO varint size header) directly to the passed buffer.
+   */
+  template <typename T, typename PackedT = PackedTypeFor<T>>
+  static StatusOr<PackedVariant<Ts...>*> format_slot_payload(
+      T&& payload, const MutableBuffer& payload_buffer) noexcept
+  {
+    DataPacker packer{payload_buffer};
+
+    PackedVariant<Ts...>* const variant_head =
+        packer.pack_record(batt::StaticType<PackedVariant<Ts...>>{});
+
+    if (!variant_head) {
+      return ::llfs::make_status(StatusCode::kFailedToPackSlotVarHead);
+    }
+
+    variant_head->init(batt::StaticType<PackedT>{});
+
+    if (!pack_object(BATT_FORWARD(payload), &packer)) {
+      VLOG(1) << BATT_INSPECT(payload_buffer.size()) << BATT_INSPECT(packed_sizeof(payload))
+              << BATT_INSPECT(packer.space()) << BATT_INSPECT(batt::name_of<T>());
+      return ::llfs::make_status(StatusCode::kFailedToPackSlotVarTail);
+    }
+
+    return variant_head;
+  }
+
+  /** \brief Formats a slot (including varint size header) directly to the passed buffer.
+   */
+  template <typename T, typename PackedT = PackedTypeFor<T>>
+  static StatusOr<FormatSlotResult<PackedVariant<Ts...>>> format_slot(
+      usize slot_payload_size, T&& payload, const MutableBuffer& slot_buffer) noexcept
+  {
+    BATT_CHECK_NE(slot_payload_size, 0);
+
+    slot_payload_size += sizeof(PackedVariant<Ts...>);
+
+    FormatSlotResult<PackedVariant<Ts...>> result;
+
+    const usize slot_header_size = packed_sizeof_varint(slot_payload_size);
+    const usize slot_size = slot_header_size + slot_payload_size;
+
+    if (slot_buffer.size() < slot_size) {
+      return ::llfs::make_status(
+          StatusCode::kSlotGrantTooSmall);  // TODO [tastolfi 2025-01-15] more accurate error status
+                                            // code: kSlotBufferTooSmall
+    }
+
+    Optional<MutableBuffer> payload_buffer = pack_varint_to(slot_buffer, slot_payload_size);
+    BATT_CHECK(payload_buffer);
+
+    StatusOr<PackedVariant<Ts...>*> packed_variant =  //
+        Self::format_slot_payload<T, PackedT>(        //
+            BATT_FORWARD(payload),                    //
+            MutableBuffer{
+                payload_buffer->data(),
+                slot_payload_size,
+            });
+
+    BATT_REQUIRE_OK(packed_variant);
+
+    result.slot_data = ConstBuffer{slot_buffer.data(), slot_size};
+    result.packed_payload = *packed_variant;
+    result.unused_buffer = slot_buffer + slot_size;
+
+    return result;
+  }
 
   /** \brief An append operation of one or more slots.
    */
@@ -267,7 +387,7 @@ class TypedSlotWriter<PackedVariant<Ts...>> : public SlotWriter
      */
     template <typename T, typename PackedT = PackedTypeFor<T>>
     StatusOr<SlotParseWithPayload<const PackedT*>> typed_append(const batt::Grant& caller_grant,
-                                                                T&& payload)
+                                                                T&& payload) noexcept
     {
       // Calculate packed size of payload.
       //
@@ -280,25 +400,16 @@ class TypedSlotWriter<PackedVariant<Ts...>> : public SlotWriter
 
       // Pack the payload.
       //
-      DataPacker packer{payload_buffer};
+      StatusOr<PackedVariant<Ts...>*> variant_head =
+          TypedSlotWriter<PackedVariant<Ts...>>::format_slot_payload<T, PackedT>(
+              BATT_FORWARD(payload), payload_buffer);
 
-      PackedVariant<Ts...>* const variant_head =
-          packer.pack_record(batt::StaticType<PackedVariant<Ts...>>{});
-
-      if (!variant_head) {
-        return ::llfs::make_status(StatusCode::kFailedToPackSlotVarHead);
-      }
-
-      variant_head->init(batt::StaticType<PackedT>{});
-
-      if (!pack_object(BATT_FORWARD(payload), &packer)) {
-        return ::llfs::make_status(StatusCode::kFailedToPackSlotVarTail);
-      }
+      BATT_REQUIRE_OK(variant_head);
 
       // Add the packed slot to the deferred commit segment.
       //
       SlotRange slot_range = this->writer_lock_.defer_commit();
-      auto* slot_payload_start = reinterpret_cast<const char*>(variant_head);
+      auto* slot_payload_start = reinterpret_cast<const char*>(*variant_head);
 
       return SlotParseWithPayload<const PackedT*>{
           .slot =
@@ -307,7 +418,7 @@ class TypedSlotWriter<PackedVariant<Ts...>> : public SlotWriter
                   .body = std::string_view{slot_payload_start, slot_payload_size},
                   .total_grant_spent = slot_payload_size,
               },
-          .payload = variant_head->as(batt::StaticType<PackedT>{}),
+          .payload = (*variant_head)->as(batt::StaticType<PackedT>{}),
       };
     }
 

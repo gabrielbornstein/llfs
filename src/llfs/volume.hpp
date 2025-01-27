@@ -67,6 +67,19 @@ class Volume
 
   static bool write_new_pages_asap();
 
+  template <typename T>
+  static StatusOr<FormatSlotResult<VolumeEventVariant>> format_slot(
+      const T& payload, const MutableBuffer& slot_buffer) noexcept
+  {
+    llfs::PackObjectAsRawData<const T&> packed_obj_as_raw{payload};
+
+    const usize slot_payload_size = packed_sizeof(payload);
+    BATT_CHECK_EQ(slot_payload_size, packed_sizeof(packed_obj_as_raw));
+
+    return TypedSlotWriter<VolumeEventVariant>::format_slot(slot_payload_size, packed_obj_as_raw,
+                                                            slot_buffer);
+  }
+
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 
   ~Volume() noexcept;
@@ -129,6 +142,11 @@ class Volume
   // Atomically append a new slot containing `payload` to the end of the root log.
   //
   StatusOr<SlotRange> append(const std::string_view& payload, batt::Grant& grant);
+
+  /** \brief Appends raw, pre-formatted data to the root log.
+   */
+  template <typename ConstBufferSequence>
+  StatusOr<SlotRange> direct_append(const ConstBufferSequence& data, batt::Grant& grant) noexcept;
 
   // Create a new PageCacheJob for writing new pages via the WAL of this Volume.
   //

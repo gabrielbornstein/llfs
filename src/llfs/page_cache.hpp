@@ -138,6 +138,12 @@ class PageCache : public PageLoader
 
   const PageCacheOptions& options() const;
 
+  Status set_filter_builder(batt::TaskScheduler& task_scheduler, PageSize src_page_size,
+                            PageSize filter_page_size,
+                            std::unique_ptr<PageFilterBuilder>&& filter_builder) noexcept;
+
+  Optional<PageId> filter_page_id_for(PageId page_id) noexcept;
+
   /** \brief DEPRECATED - use register_page_reader.
    */
   bool register_page_layout(const PageLayoutId& layout_id, const PageReader& reader);
@@ -181,6 +187,8 @@ class PageCache : public PageLoader
   const PageArena& arena_for_page_id(PageId id_val) const;
 
   const PageArena& arena_for_device_id(page_device_id_int device_id_val) const;
+
+  void async_write_new_page(PinnedPage&& pinned_page, PageDevice::WriteHandler&& handler) noexcept;
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
   // PageLoader interface

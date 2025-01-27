@@ -212,6 +212,83 @@ const PageCacheOptions& PageCache::options() const
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+Status PageCache::set_filter_builder(batt::TaskScheduler& task_scheduler, PageSize src_page_size,
+                                     PageSize filter_page_size,
+                                     std::unique_ptr<PageFilterBuilder>&& filter_builder) noexcept
+{
+  // Find and cache the PageDeviceEntry for the filter device and leaf device.
+  //
+  llfs::Slice<llfs::PageDeviceEntry* const> src_entries =
+      this->devices_with_page_size(src_page_size);
+
+  llfs::Slice<llfs::PageDeviceEntry* const> filter_entries =
+      this->devices_with_page_size(filter_page_size);
+
+  if (src_entries.size() == 0 || filter_entries.size() == 0) {
+    return batt::StatusCode::kNotFound;
+  }
+
+  llfs::PageDeviceEntry* found_src_entry = nullptr;
+  llfs::PageDeviceEntry* found_filter_entry = nullptr;
+
+  // Search through all src-page-size devices and all filter-page-size devices, looking for a pair
+  // that have the same page count.  Panic unless this is the *only* such pair.
+  //
+  for (llfs::PageDeviceEntry* src_entry : src_entries) {
+    const llfs::PageCount src_page_count =
+        src_entry->arena.device().page_ids().get_physical_page_count();
+
+    for (llfs::PageDeviceEntry* filter_entry : filter_entries) {
+      const llfs::PageCount filter_page_count =
+          filter_entry->arena.device().page_ids().get_physical_page_count();
+
+      if (src_page_count == filter_page_count) {
+        if (found_src_entry != nullptr || found_filter_entry != nullptr) {
+          return batt::StatusCode::kUnavailable;
+        }
+
+        found_src_entry = src_entry;
+        found_filter_entry = filter_entry;
+        //
+        // IMPORTANT: we do not exit the loops early because we want to verify that this is the only
+        // match!
+      }
+    }
+  }
+
+  if (found_src_entry == nullptr || found_filter_entry == nullptr) {
+    return batt::StatusCode::kNotFound;
+  }
+
+  found_filter_entry->can_alloc = false;
+  found_src_entry->filter_builder_task =
+      std::make_unique<PageFilterBuilderTask>(task_scheduler,                                   //
+                                              std::move(filter_builder),                        //
+                                              std::addressof(found_src_entry->arena.device()),  //
+                                              std::addressof(found_filter_entry->arena.device()));
+
+  return OkStatus();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Optional<PageId> PageCache::filter_page_id_for(PageId src_page_id) noexcept
+{
+  const auto device_id = PageIdFactory::get_device_id(src_page_id);
+  if (device_id >= this->page_devices_.size()) {
+    return None;
+  }
+
+  PageDeviceEntry& src_entry = *this->page_devices_[device_id];
+  if (!src_entry.filter_builder_task) {
+    return None;
+  }
+
+  return src_entry.filter_builder_task->filter_page_id_for(src_page_id);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 bool PageCache::register_page_layout(const PageLayoutId& layout_id, const PageReader& reader)
 {
   LLFS_LOG_WARNING() << "PageCache::register_page_layout is DEPRECATED; please use "
@@ -256,6 +333,9 @@ void PageCache::close()
   for (const std::unique_ptr<PageDeviceEntry>& entry : this->page_devices_) {
     if (entry) {
       entry->arena.halt();
+      if (entry->filter_builder_task) {
+        entry->filter_builder_task->halt();
+      }
     }
   }
 }
@@ -267,6 +347,9 @@ void PageCache::join()
   for (const std::unique_ptr<PageDeviceEntry>& entry : this->page_devices_) {
     if (entry) {
       entry->arena.join();
+      if (entry->filter_builder_task) {
+        entry->filter_builder_task->join();
+      }
     }
   }
 }
@@ -309,6 +392,9 @@ StatusOr<std::shared_ptr<PageBuffer>> PageCache::allocate_page_of_size_log2(
   //
   for (auto wait_arg : {batt::WaitForResource::kFalse, batt::WaitForResource::kTrue}) {
     for (PageDeviceEntry* device_entry : device_entries) {
+      if (!device_entry->can_alloc) {
+        continue;
+      }
       PageArena& arena = device_entry->arena;
       StatusOr<PageId> page_id = arena.allocator().allocate_page(wait_arg, cancel_token);
       if (!page_id.ok()) {
@@ -468,6 +554,28 @@ const PageArena& PageCache::arena_for_device_id(page_device_id_int device_id_val
   BATT_CHECK_NOT_NULLPTR(this->page_devices_[device_id_val]);
 
   return this->page_devices_[device_id_val]->arena;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void PageCache::async_write_new_page(PinnedPage&& pinned_page,
+                                     PageDevice::WriteHandler&& handler) noexcept
+{
+  const PageId page_id = pinned_page.page_id();
+  const auto device_id_val = PageIdFactory::get_device_id(page_id);
+
+  BATT_CHECK_LT(device_id_val, this->page_devices_.size())
+      << "the specified page_id's device is not in the storage pool for this cache";
+
+  BATT_CHECK_NOT_NULLPTR(this->page_devices_[device_id_val]);
+
+  PageDeviceEntry& entry = *this->page_devices_[device_id_val];
+
+  entry.arena.device().write(pinned_page.get_page_buffer(), std::move(handler));
+
+  if (entry.filter_builder_task) {
+    entry.filter_builder_task->push(std::move(pinned_page)).IgnoreError();
+  }
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

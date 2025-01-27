@@ -18,6 +18,7 @@
 #include <batteries/async/worker_pool.hpp>
 #include <batteries/math.hpp>
 
+#include <batteries/hint.hpp>
 #include <batteries/math.hpp>
 #include <batteries/seq/loop_control.hpp>
 #include <batteries/static_assert.hpp>
@@ -132,6 +133,16 @@ inline double optimal_bloom_filter_bit_rate(double target_false_positive_P)
   return -std::log(target_false_positive_P) * log_phi_e;
 }
 
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+
+struct BloomFilterQuery {
+  std::variant<usize, std::string_view> key;
+  std::array<u64, 64> cached_hash_values;
+  u16 cached_count = 0;
+};
+
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+
 struct PackedBloomFilter {
   // The size of the filter in 64-bit words.
   //
@@ -197,12 +208,42 @@ struct PackedBloomFilter {
     return u64{1} << (hash_val & 63);
   }
 
+  bool test_hash_value(u64 h) const noexcept
+  {
+    return (this->words[this->index_from_hash(h)].value() & this->bit_mask_from_hash(h)) != 0;
+  }
+
+  bool query(BloomFilterQuery& query) const noexcept
+  {
+    const usize n_hashes = this->hash_count.value();
+
+    // First cache any hash values that aren't already cached.
+    //
+    if (BATT_HINT_FALSE(query.cached_count < n_hashes)) {
+      batt::case_of(query.key, [&query, this, n_hashes](const auto& key_case) {
+        do {
+          query.cached_hash_values[query.cached_count] =
+              detail::get_nth_hash_for_bloom(key_case, query.cached_count);
+          ++query.cached_count;
+        } while (query.cached_count != n_hashes);
+      });
+    }
+
+    // Now test each hash against the bitmap.
+    //
+    for (usize i = 0; i < n_hashes; ++i) {
+      if (!this->test_hash_value(query.cached_hash_values[i])) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   template <typename T>
   bool might_contain(const T& item) const
   {
     return hash_for_bloom(item, this->hash_count, [this](u64 h) {
-             if ((this->words[this->index_from_hash(h)].value() & this->bit_mask_from_hash(h)) ==
-                 0) {
+             if (!this->test_hash_value(h)) {
                return seq::LoopControl::kBreak;
              }
              return seq::LoopControl::kContinue;
@@ -249,6 +290,15 @@ template <typename Iter, typename HashFn>
 void parallel_build_bloom_filter(batt::WorkerPool& worker_pool, Iter first, Iter last,
                                  const HashFn& hash_fn, PackedBloomFilter* filter)
 {
+  if (worker_pool.size() == 0) {
+    auto src = boost::make_iterator_range(first, last);
+    filter->clear();
+    for (const auto& item : src) {
+      filter->insert(hash_fn(item));
+    }
+    return;
+  }
+
   const batt::WorkSliceParams stage1_params{
       .min_task_size =
           batt::TaskSize{u64(1024 /*?*/ + filter->hash_count - 1) / filter->hash_count},

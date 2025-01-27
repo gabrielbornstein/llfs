@@ -361,7 +361,9 @@ Status CommittablePageCacheJob::WriteNewPagesContext::start()
       std::shared_ptr<const PageView> new_page_view = new_page.view();
       BATT_CHECK_NOT_NULLPTR(new_page_view);
       BATT_CHECK_EQ(page_id, new_page_view->page_id());
-      BATT_CHECK(this->job->get_already_pinned(page_id) != None) << BATT_INSPECT(page_id);
+
+      Optional<PinnedPage> pinned_page = this->job->get_already_pinned(page_id);
+      BATT_CHECK(pinned_page != None) << BATT_INSPECT(page_id);
 
       // Finalize the client uuid and slot that uniquely identifies this transaction, so we can
       // guarantee exactly-once side effects in the presence of crashes.
@@ -378,8 +380,7 @@ Status CommittablePageCacheJob::WriteNewPagesContext::start()
 
       this->ops[i].page_id = page_id;
 
-      this->job->cache().arena_for_page_id(page_id).device().write(new_page.const_buffer(),
-                                                                   this->ops[i].get_handler());
+      this->job->cache().async_write_new_page(std::move(*pinned_page), this->ops[i].get_handler());
 
       this->total_byte_count += page_size;
       this->used_byte_count += used_size;

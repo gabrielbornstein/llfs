@@ -22,6 +22,7 @@ using ::batt::LatencyTimer;
 using ::batt::MetricLabel;
 using ::batt::MetricLabelSet;
 using ::batt::MetricRegistry;
+using ::batt::RateMetric;
 
 #define LLFS_COLLECT_LATENCY BATT_COLLECT_LATENCY
 #define LLFS_COLLECT_LATENCY_N BATT_COLLECT_LATENCY_N
