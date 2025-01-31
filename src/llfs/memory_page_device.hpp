@@ -11,6 +11,7 @@
 #define LLFS_MEMORY_PAGE_DEVICE_HPP
 
 #include <llfs/int_types.hpp>
+#include <llfs/optional.hpp>
 #include <llfs/page_device.hpp>
 #include <llfs/page_size.hpp>
 #include <llfs/status.hpp>
@@ -48,6 +49,8 @@ class MemoryPageDevice : public PageDevice
   struct PageRec {
     std::shared_ptr<const PageBuffer> page;
     page_generation_int generation = 0;
+    Optional<boost::stacktrace::stacktrace> stack;
+    i32 task_id = -1;
   };
 
   struct State {

@@ -9,6 +9,7 @@
 #include <llfs/memory_page_device.hpp>
 //
 
+#include <batteries/async/task.hpp>
 #include <batteries/checked_cast.hpp>
 
 namespace llfs {
@@ -63,11 +64,16 @@ void MemoryPageDevice::write(std::shared_ptr<const PageBuffer>&& buffer, WriteHa
     BATT_CHECK_LT(physical_page, batt::checked_cast<i64>(locked->page_recs.size()));
     BATT_CHECK(this->page_ids_.generation_less_than(locked->page_recs[physical_page].generation,
                                                     generation))
-        << "\n  current generation = " << locked->page_recs[physical_page].generation
-        << "\n  write generation =   " << generation;
+        << "\n  current generation = " << locked->page_recs[physical_page].generation  //
+        << "\n  write generation =   " << generation                                   //
+        << "\n  last_task_id =       " << locked->page_recs[physical_page].task_id     //
+        << "\n  last write =\n"
+        << locked->page_recs[physical_page].stack;
 
     locked->page_recs[physical_page].page = std::move(buffer);
     locked->page_recs[physical_page].generation = generation;
+    locked->page_recs[physical_page].stack = boost::stacktrace::stacktrace{};
+    locked->page_recs[physical_page].task_id = batt::Task::current_id();
 
     return OkStatus();
   }();
@@ -97,15 +103,15 @@ void MemoryPageDevice::read(PageId page_id, ReadHandler&& handler)
       not_found = true;
       not_found_reason = "generations do not match";
     }
-    if (rec.page == nullptr) {
+    if (rec.page == nullptr && requested_generation <= current_generation_on_device) {
       not_found = true;
       not_found_reason = "page has been dropped";
     }
     if (not_found) {
-      LLFS_LOG_INFO() << "failing read with `kNotFound` (" << not_found_reason << ");"
-                      << BATT_INSPECT(page_id) << BATT_INSPECT(requested_generation)
-                      << BATT_INSPECT(current_generation_on_device)
-                      << BATT_INSPECT((const void*)rec.page.get()) <<
+      LLFS_VLOG(1) << "failing read with `kNotFound` (" << not_found_reason << ");"
+                   << BATT_INSPECT(page_id) << BATT_INSPECT(requested_generation)
+                   << BATT_INSPECT(current_generation_on_device)
+                   << BATT_INSPECT((const void*)rec.page.get()) <<
           [&](std::ostream& out) {
             out << std::endl;
             batt::this_task_debug_info(out);
@@ -120,7 +126,7 @@ void MemoryPageDevice::read(PageId page_id, ReadHandler&& handler)
               }
             }
           };
-      LLFS_VLOG(1) << boost::stacktrace::stacktrace{};
+
       return Status{batt::StatusCode::kNotFound};  // TODO [tastolfi 2021-10-20] Add custom message?
     }
 

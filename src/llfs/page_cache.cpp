@@ -501,7 +501,7 @@ Status PageCache::detach(const boost::uuids::uuid& user_id, slot_offset_type slo
 //
 void PageCache::prefetch_hint(PageId page_id)
 {
-  (void)this->find_page_in_cache(page_id, /*require_tag=*/None, OkIfNotFound{false});
+  (void)this->find_page_in_cache(page_id, /*require_tag=*/None, OkIfNotFound{true});
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

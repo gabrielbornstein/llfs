@@ -116,6 +116,9 @@ TEST(BloomFilterTest, RandomItems)
 
       for (const std::string& s : items) {
         EXPECT_TRUE(filter->might_contain(s));
+
+        llfs::BloomFilterQuery<std::string_view> query{s};
+        EXPECT_TRUE(filter->query(query));
       }
 
       const auto items_contains = [&items](const std::string& s) {
@@ -134,13 +137,18 @@ TEST(BloomFilterTest, RandomItems)
       }
 
       for (usize j = 0; j < n_items * 10; ++j) {
-        std::string query = make_random_word(rng);
+        std::string query_str = make_random_word(rng);
         c_stats.total += 1;
-        const bool ans = LLFS_COLLECT_LATENCY_N(query_latency, filter->might_contain(query),
+        const bool ans = LLFS_COLLECT_LATENCY_N(query_latency, filter->might_contain(query_str),
                                                 u64(std::ceil(actual_bit_rate)));
-        if (ans && !items_contains(query)) {
+        if (ans && !items_contains(query_str)) {
           c_stats.false_positive += 1;
         }
+
+        // Confirm that the BloomFilterQuery object gives the same answer.
+        //
+        llfs::BloomFilterQuery<std::string_view> query_obj{query_str};
+        EXPECT_EQ(filter->query(query_obj), ans);
       }
 
       false_positive_rate_count += 1.0;
