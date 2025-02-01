@@ -1,0 +1,57 @@
+I20250201 16:06:15.091237 140428053635072 bloom_filter.test.cpp:72]  (int)layout == 0
+I20250201 16:06:15.094656 140428053635072 bloom_filter.hpp:333] AVX512 enabled
+I20250201 16:06:19.380184 140428053635072 bloom_filter.test.cpp:187]  actual_fpr / expected_fpr == 0.996548 word_count == 256 hash_count == 1 actual_fpr == 0.4553 expected_fpr == 0.456877
+I20250201 16:06:19.380216 140428053635072 bloom_filter.test.cpp:187]  actual_fpr / expected_fpr == 0.998043 word_count == 512 hash_count == 1 actual_fpr == 0.26251 expected_fpr == 0.263024
+I20250201 16:06:19.380219 140428053635072 bloom_filter.test.cpp:187]  actual_fpr / expected_fpr == 1.00155 word_count == 1024 hash_count == 4 actual_fpr == 0.0436327 expected_fpr == 0.0435651
+I20250201 16:06:19.380221 140428053635072 bloom_filter.test.cpp:187]  actual_fpr / expected_fpr == 1.00724 word_count == 2048 hash_count == 8 actual_fpr == 0.00191157 expected_fpr == 0.00189784
+I20250201 16:06:19.380224 140428053635072 bloom_filter.test.cpp:187]  actual_fpr / expected_fpr == 0.869759 word_count == 4096 hash_count == 17 actual_fpr == 3e-06 expected_fpr == 3.44923e-06
+I20250201 16:06:19.380227 140428053635072 bloom_filter.test.cpp:194]  false_positive_rate_total / false_positive_rate_count == 0.94515
+I20250201 16:06:19.380229 140428053635072 bloom_filter.test.cpp:196] build latency (per key) == 0.0565193us(n=1500000) build rate (keys/sec) == 1.76931e+07
+I20250201 16:06:19.380231 140428053635072 bloom_filter.test.cpp:199] normalized query latency (per key*bit) == 1.3388e-06us(n=183000000) query rate (key*bits/sec) == 7.46939e+11
+I20250201 16:06:19.380234 140428053635072 bloom_filter.test.cpp:72]  (int)layout == 1
+I20250201 16:06:23.158658 140428053635072 bloom_filter.test.cpp:187]  actual_fpr / expected_fpr == 0.648246 word_count == 256 hash_count == 1 actual_fpr == 0.457039 expected_fpr == 0.705039
+I20250201 16:06:23.158683 140428053635072 bloom_filter.test.cpp:187]  actual_fpr / expected_fpr == 0.575739 word_count == 512 hash_count == 1 actual_fpr == 0.263042 expected_fpr == 0.456877
+I20250201 16:06:23.158685 140428053635072 bloom_filter.test.cpp:187]  actual_fpr / expected_fpr == 0.224261 word_count == 1024 hash_count == 4 actual_fpr == 0.055402 expected_fpr == 0.247043
+I20250201 16:06:23.158687 140428053635072 bloom_filter.test.cpp:187]  actual_fpr / expected_fpr == 0.151455 word_count == 2048 hash_count == 8 actual_fpr == 0.00924271 expected_fpr == 0.0610263
+I20250201 16:06:23.158689 140428053635072 bloom_filter.test.cpp:187]  actual_fpr / expected_fpr == 0.66498 word_count == 4096 hash_count == 17 actual_fpr == 0.002921 expected_fpr == 0.00439261
+I20250201 16:06:23.158691 140428053635072 bloom_filter.test.cpp:194]  false_positive_rate_total / false_positive_rate_count == 0.327843
+I20250201 16:06:23.158694 140428053635072 bloom_filter.test.cpp:196] build latency (per key) == 0.0544713us(n=1500000) build rate (keys/sec) == 1.83583e+07
+I20250201 16:06:23.158696 140428053635072 bloom_filter.test.cpp:199] normalized query latency (per key*bit) == 4.57377e-06us(n=183000000) query rate (key*bits/sec) == 2.18638e+11
+I20250201 16:06:23.158699 140428053635072 bloom_filter.test.cpp:72]  (int)layout == 2
+I20250201 16:06:27.277546 140428053635072 bloom_filter.test.cpp:187]  actual_fpr / expected_fpr == 0.856534 word_count == 256 hash_count == 1 actual_fpr == 0.457176 expected_fpr == 0.533751
+I20250201 16:06:27.277569 140428053635072 bloom_filter.test.cpp:187]  actual_fpr / expected_fpr == 0.828016 word_count == 512 hash_count == 1 actual_fpr == 0.262618 expected_fpr == 0.317166
+I20250201 16:06:27.277571 140428053635072 bloom_filter.test.cpp:187]  actual_fpr / expected_fpr == 0.556767 word_count == 1024 hash_count == 4 actual_fpr == 0.0451817 expected_fpr == 0.0811501
+I20250201 16:06:27.277574 140428053635072 bloom_filter.test.cpp:187]  actual_fpr / expected_fpr == 0.467426 word_count == 2048 hash_count == 8 actual_fpr == 0.003078 expected_fpr == 0.006585
+I20250201 16:06:27.277576 140428053635072 bloom_filter.test.cpp:187]  actual_fpr / expected_fpr == 0.83362 word_count == 4096 hash_count == 17 actual_fpr == 3.8e-05 expected_fpr == 4.55843e-05
+I20250201 16:06:27.277578 140428053635072 bloom_filter.test.cpp:194]  false_positive_rate_total / false_positive_rate_count == 0.621763
+I20250201 16:06:27.277580 140428053635072 bloom_filter.test.cpp:196] build latency (per key) == 0.055314us(n=1500000) build rate (keys/sec) == 1.80786e+07
+I20250201 16:06:27.277584 140428053635072 bloom_filter.test.cpp:199] normalized query latency (per key*bit) == 1.10929e-06us(n=183000000) query rate (key*bits/sec) == 9.01478e+11
+
+
+I20250201 16:07:34.413590 140292731080704 bloom_filter.hpp:335] AVX512 NOT enabled
+I20250201 16:07:38.850084 140292731080704 bloom_filter.test.cpp:187]  actual_fpr / expected_fpr == 0.996548 word_count == 256 hash_count == 1 actual_fpr == 0.4553 expected_fpr == 0.456877
+I20250201 16:07:38.850116 140292731080704 bloom_filter.test.cpp:187]  actual_fpr / expected_fpr == 0.998043 word_count == 512 hash_count == 1 actual_fpr == 0.26251 expected_fpr == 0.263024
+I20250201 16:07:38.850118 140292731080704 bloom_filter.test.cpp:187]  actual_fpr / expected_fpr == 1.00155 word_count == 1024 hash_count == 4 actual_fpr == 0.0436327 expected_fpr == 0.0435651
+I20250201 16:07:38.850121 140292731080704 bloom_filter.test.cpp:187]  actual_fpr / expected_fpr == 1.00724 word_count == 2048 hash_count == 8 actual_fpr == 0.00191157 expected_fpr == 0.00189784
+I20250201 16:07:38.850123 140292731080704 bloom_filter.test.cpp:187]  actual_fpr / expected_fpr == 0.869759 word_count == 4096 hash_count == 17 actual_fpr == 3e-06 expected_fpr == 3.44923e-06
+I20250201 16:07:38.850126 140292731080704 bloom_filter.test.cpp:194]  false_positive_rate_total / false_positive_rate_count == 0.94515
+I20250201 16:07:38.850127 140292731080704 bloom_filter.test.cpp:196] build latency (per key) == 0.0571us(n=1500000) build rate (keys/sec) == 1.75131e+07
+I20250201 16:07:38.850130 140292731080704 bloom_filter.test.cpp:199] normalized query latency (per key*bit) == 1.43716e-06us(n=183000000) query rate (key*bits/sec) == 6.95817e+11
+I20250201 16:07:38.850132 140292731080704 bloom_filter.test.cpp:72]  (int)layout == 1
+I20250201 16:07:42.742827 140292731080704 bloom_filter.test.cpp:187]  actual_fpr / expected_fpr == 0.648246 word_count == 256 hash_count == 1 actual_fpr == 0.457039 expected_fpr == 0.705039
+I20250201 16:07:42.742857 140292731080704 bloom_filter.test.cpp:187]  actual_fpr / expected_fpr == 0.575739 word_count == 512 hash_count == 1 actual_fpr == 0.263042 expected_fpr == 0.456877
+I20250201 16:07:42.742859 140292731080704 bloom_filter.test.cpp:187]  actual_fpr / expected_fpr == 0.224261 word_count == 1024 hash_count == 4 actual_fpr == 0.055402 expected_fpr == 0.247043
+I20250201 16:07:42.742861 140292731080704 bloom_filter.test.cpp:187]  actual_fpr / expected_fpr == 0.151455 word_count == 2048 hash_count == 8 actual_fpr == 0.00924271 expected_fpr == 0.0610263
+I20250201 16:07:42.742863 140292731080704 bloom_filter.test.cpp:187]  actual_fpr / expected_fpr == 0.66498 word_count == 4096 hash_count == 17 actual_fpr == 0.002921 expected_fpr == 0.00439261
+I20250201 16:07:42.742865 140292731080704 bloom_filter.test.cpp:194]  false_positive_rate_total / false_positive_rate_count == 0.327843
+I20250201 16:07:42.742868 140292731080704 bloom_filter.test.cpp:196] build latency (per key) == 0.05332us(n=1500000) build rate (keys/sec) == 1.87547e+07
+I20250201 16:07:42.742871 140292731080704 bloom_filter.test.cpp:199] normalized query latency (per key*bit) == 8.03279e-07us(n=183000000) query rate (key*bits/sec) == 1.2449e+12
+I20250201 16:07:42.742874 140292731080704 bloom_filter.test.cpp:72]  (int)layout == 2
+I20250201 16:07:46.998008 140292731080704 bloom_filter.test.cpp:187]  actual_fpr / expected_fpr == 0.856534 word_count == 256 hash_count == 1 actual_fpr == 0.457176 expected_fpr == 0.533751
+I20250201 16:07:46.998031 140292731080704 bloom_filter.test.cpp:187]  actual_fpr / expected_fpr == 0.828016 word_count == 512 hash_count == 1 actual_fpr == 0.262618 expected_fpr == 0.317166
+I20250201 16:07:46.998033 140292731080704 bloom_filter.test.cpp:187]  actual_fpr / expected_fpr == 0.556767 word_count == 1024 hash_count == 4 actual_fpr == 0.0451817 expected_fpr == 0.0811501
+I20250201 16:07:46.998036 140292731080704 bloom_filter.test.cpp:187]  actual_fpr / expected_fpr == 0.467426 word_count == 2048 hash_count == 8 actual_fpr == 0.003078 expected_fpr == 0.006585
+I20250201 16:07:46.998038 140292731080704 bloom_filter.test.cpp:187]  actual_fpr / expected_fpr == 0.83362 word_count == 4096 hash_count == 17 actual_fpr == 3.8e-05 expected_fpr == 4.55843e-05
+I20250201 16:07:46.998040 140292731080704 bloom_filter.test.cpp:194]  false_positive_rate_total / false_positive_rate_count == 0.621763
+I20250201 16:07:46.998042 140292731080704 bloom_filter.test.cpp:196] build latency (per key) == 0.0531473us(n=1500000) build rate (keys/sec) == 1.88156e+07
+I20250201 16:07:46.998046 140292731080704 bloom_filter.test.cpp:199] normalized query latency (per key*bit) == 1.51366e-06us(n=183000000) query rate (key*bits/sec) == 6.6065e+11

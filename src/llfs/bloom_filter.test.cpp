@@ -67,124 +67,138 @@ struct QueryStats {
 
 TEST(BloomFilterTest, RandomItems)
 {
-  std::default_random_engine rng{15324987};
+  for (u8 layout : {PackedBloomFilter::kLayoutFlat, PackedBloomFilter::kLayoutBlocked64,
+                    PackedBloomFilter::kLayoutBlocked512}) {
+    LLFS_LOG_INFO() << BATT_INSPECT((int)layout) << std::endl;
 
-  std::map<std::pair<u64, u16>, QueryStats> stats;
+    std::default_random_engine rng{15324987};
 
-  LatencyMetric build_latency;
-  LatencyMetric query_latency;
+    std::map<std::pair<u64, u16>, QueryStats> stats;
 
-  double false_positive_rate_total = 0.0;
-  double false_positive_rate_count = 0.0;
+    LatencyMetric build_latency;
+    LatencyMetric query_latency;
 
-  for (usize r = 0; r < 10; ++r) {
-    std::vector<std::string> items;
-    const usize n_items = 10 * 1000;
-    for (usize i = 0; i < n_items; ++i) {
-      items.emplace_back(make_random_word(rng));
-    }
-    for (const auto& s : as_slice(items.data(), 40)) {
-      LLFS_VLOG(1) << "sample random word: " << s;
-    }
-    std::sort(items.begin(), items.end());
+    double false_positive_rate_total = 0.0;
+    double false_positive_rate_count = 0.0;
 
-    for (usize bits_per_item = 1; bits_per_item < 16; ++bits_per_item) {
-      const BloomFilterParams params{
-          .bits_per_item = bits_per_item,
-      };
-
-      std::unique_ptr<u8[]> memory{new u8[packed_sizeof_bloom_filter(params, items.size())]};
-      PackedBloomFilter* filter = (PackedBloomFilter*)memory.get();
-      *filter = PackedBloomFilter::from_params(params, items.size());
-
-      const double actual_bit_rate = double(filter->word_count() * 64) / double(items.size());
-
-      LLFS_VLOG(1) << BATT_INSPECT(n_items) << " (target)" << BATT_INSPECT(bits_per_item)
-                   << BATT_INSPECT(filter->word_count()) << BATT_INSPECT(filter->hash_count)
-                   << " bit_rate == " << actual_bit_rate;
-
-      {
-        LatencyTimer build_timer{build_latency, items.size()};
-
-        parallel_build_bloom_filter(
-            WorkerPool::default_pool(), items.begin(), items.end(),
-            [](const auto& v) -> decltype(auto) {
-              return v;
-            },
-            filter);
+    for (usize r = 0; r < 10; ++r) {
+      std::vector<std::string> items;
+      const usize n_items = 10 * 1000;
+      for (usize i = 0; i < n_items; ++i) {
+        items.emplace_back(make_random_word(rng));
       }
-
-      for (const std::string& s : items) {
-        EXPECT_TRUE(filter->might_contain(s));
-
-        llfs::BloomFilterQuery<std::string_view> query{s};
-        EXPECT_TRUE(filter->query(query));
+      for (const auto& s : as_slice(items.data(), 40)) {
+        LLFS_VLOG(1) << "sample random word: " << s;
       }
+      std::sort(items.begin(), items.end());
 
-      const auto items_contains = [&items](const std::string& s) {
-        auto iter = std::lower_bound(items.begin(), items.end(), s);
-        return iter != items.end() && *iter == s;
-      };
+      for (usize bits_per_item = 1; bits_per_item < 16; ++bits_per_item) {
+        const BloomFilterParams params{
+            .bits_per_item = bits_per_item,
+        };
 
-      std::pair<u64, u16> config_key{filter->word_count(), filter->hash_count};
-      QueryStats& c_stats = stats[config_key];
-      {
-        const double k = filter->hash_count;
-        const double n = items.size();
-        const double m = filter->word_count() * 64;
+        std::unique_ptr<u8[]> memory{new u8[packed_sizeof_bloom_filter(params, items.size())]};
+        PackedBloomFilter* filter = (PackedBloomFilter*)memory.get();
+        *filter = PackedBloomFilter::from_params(params, items.size(), layout);
 
-        c_stats.expected_rate = std::pow(1 - std::exp(-((k * (n + 0.5)) / (m - 1))), k);
-      }
+        const double actual_bit_rate = double(filter->word_count() * 64) / double(items.size());
 
-      for (usize j = 0; j < n_items * 10; ++j) {
-        std::string query_str = make_random_word(rng);
-        c_stats.total += 1;
-        const bool ans = LLFS_COLLECT_LATENCY_N(query_latency, filter->might_contain(query_str),
-                                                u64(std::ceil(actual_bit_rate)));
-        if (ans && !items_contains(query_str)) {
-          c_stats.false_positive += 1;
+        LLFS_VLOG(1) << BATT_INSPECT(n_items) << " (target)" << BATT_INSPECT(bits_per_item)
+                     << BATT_INSPECT(filter->word_count()) << BATT_INSPECT(filter->hash_count)
+                     << " bit_rate == " << actual_bit_rate;
+
+        {
+          LatencyTimer build_timer{build_latency, items.size()};
+
+          parallel_build_bloom_filter(
+              WorkerPool::default_pool(), items.begin(), items.end(),
+              [](const auto& v) -> decltype(auto) {
+                return v;
+              },
+              filter);
         }
 
-        // Confirm that the BloomFilterQuery object gives the same answer.
-        //
-        llfs::BloomFilterQuery<std::string_view> query_obj{query_str};
-        EXPECT_EQ(filter->query(query_obj), ans);
+        for (const std::string& s : items) {
+          EXPECT_TRUE(filter->might_contain(s));
+
+          llfs::BloomFilterQuery<std::string_view> query{s};
+          EXPECT_TRUE(filter->query(query));
+        }
+
+        const auto items_contains = [&items](const std::string& s) {
+          auto iter = std::lower_bound(items.begin(), items.end(), s);
+          return iter != items.end() && *iter == s;
+        };
+
+        std::pair<u64, u16> config_key{filter->word_count(), filter->hash_count};
+        QueryStats& c_stats = stats[config_key];
+        {
+          const double k = filter->hash_count;
+          const double n = items.size();
+          const double m = filter->word_count() * 64 * [&] {
+            switch (layout) {
+              case PackedBloomFilter::kLayoutBlocked64:
+                return 0.5;
+              case PackedBloomFilter::kLayoutBlocked512:
+                return 0.8;
+              default:
+                return 1.0;
+            }
+          }();
+
+          c_stats.expected_rate = std::pow(1 - std::exp(-((k * (n + 0.5)) / (m - 1))), k);
+        }
+
+        for (usize j = 0; j < n_items * 10; ++j) {
+          std::string query_str = make_random_word(rng);
+          c_stats.total += 1;
+          const bool ans = LLFS_COLLECT_LATENCY_N(query_latency, filter->might_contain(query_str),
+                                                  u64(std::ceil(actual_bit_rate)));
+          if (ans && !items_contains(query_str)) {
+            c_stats.false_positive += 1;
+          }
+
+          // Confirm that the BloomFilterQuery object gives the same answer.
+          //
+          llfs::BloomFilterQuery<std::string_view> query_obj{query_str};
+          EXPECT_EQ(filter->query(query_obj), ans);
+        }
+
+        false_positive_rate_count += 1.0;
+        false_positive_rate_total += (c_stats.actual_rate() / c_stats.expected_rate);
       }
-
-      false_positive_rate_count += 1.0;
-      false_positive_rate_total += (c_stats.actual_rate() / c_stats.expected_rate);
     }
+
+    for (const auto& s : stats) {
+      const u64 word_count = s.first.first;
+      const u16 hash_count = s.first.second;
+
+      // fpr == false positive rate
+      //
+      const double actual_fpr = s.second.actual_rate();
+      const double expected_fpr = s.second.expected_rate;
+
+      EXPECT_LT(actual_fpr / expected_fpr, 1.02)
+          << BATT_INSPECT(actual_fpr) << BATT_INSPECT(expected_fpr);
+
+      EXPECT_GT(expected_fpr / actual_fpr, 0.98)
+          << BATT_INSPECT(actual_fpr) << BATT_INSPECT(expected_fpr);
+
+      LLFS_LOG_INFO() << BATT_INSPECT(actual_fpr / expected_fpr) << BATT_INSPECT(word_count)
+                      << BATT_INSPECT(hash_count) << BATT_INSPECT(actual_fpr)
+                      << BATT_INSPECT(expected_fpr);
+    }
+
+    EXPECT_LT(false_positive_rate_total / false_positive_rate_count, 1.01);
+
+    LLFS_LOG_INFO() << BATT_INSPECT(false_positive_rate_total / false_positive_rate_count);
+
+    LLFS_LOG_INFO() << "build latency (per key) == " << build_latency
+                    << " build rate (keys/sec) == " << build_latency.rate_per_second();
+
+    LLFS_LOG_INFO() << "normalized query latency (per key*bit) == " << query_latency
+                    << " query rate (key*bits/sec) == " << query_latency.rate_per_second();
   }
-
-  for (const auto& s : stats) {
-    const u64 word_count = s.first.first;
-    const u16 hash_count = s.first.second;
-
-    // fpr == false positive rate
-    //
-    const double actual_fpr = s.second.actual_rate();
-    const double expected_fpr = s.second.expected_rate;
-
-    EXPECT_LT(actual_fpr / expected_fpr, 1.02)
-        << BATT_INSPECT(actual_fpr) << BATT_INSPECT(expected_fpr);
-
-    EXPECT_GT(expected_fpr / actual_fpr, 0.98)
-        << BATT_INSPECT(actual_fpr) << BATT_INSPECT(expected_fpr);
-
-    LLFS_LOG_INFO() << BATT_INSPECT(actual_fpr / expected_fpr) << BATT_INSPECT(word_count)
-                    << BATT_INSPECT(hash_count) << BATT_INSPECT(actual_fpr)
-                    << BATT_INSPECT(expected_fpr);
-  }
-
-  EXPECT_LT(false_positive_rate_total / false_positive_rate_count, 1.01);
-
-  LLFS_LOG_INFO() << BATT_INSPECT(false_positive_rate_total / false_positive_rate_count);
-
-  LLFS_LOG_INFO() << "build latency (per key) == " << build_latency
-                  << " build rate (keys/sec) == " << build_latency.rate_per_second();
-
-  LLFS_LOG_INFO() << "normalized query latency (per key*bit) == " << query_latency
-                  << " query rate (key*bits/sec) == " << query_latency.rate_per_second();
 }
 
 }  // namespace
