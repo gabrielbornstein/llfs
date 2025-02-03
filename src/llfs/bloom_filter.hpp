@@ -12,6 +12,8 @@
 
 #include <llfs/config.hpp>
 //
+#include <llfs/api_types.hpp>
+#include <llfs/conversion.hpp>
 #include <llfs/data_layout.hpp>
 #include <llfs/key.hpp>
 #include <llfs/seq.hpp>
@@ -38,14 +40,142 @@
 
 namespace llfs {
 
-/** \brief Parameters used to build a Bloom filter.
- *
- * If instead of bits-per-item, one wants to set a given false positive (error) rate, then the
- * function optimal_bloom_filter_bit_rate may be used to calculate the required bit rate.
+/** \brief Physical layout of a Bloom filter; each carries different trade-offs.
  */
-struct BloomFilterParams {
-  usize bits_per_item;
+enum struct BloomFilterLayout : u8 {
+
+  /** \brief All keys are hashed/inserted into a single bit map.
+   */
+  kFlat = 0,
+
+  /** \brief Filter is divided into flat filters (blocks) of 64 bits (8 bytes) each; a given key is
+   * hashed/inserted into the block specified by its first hash function.  The bits set within that
+   * block are determined by 6-bit indexes packed into the second, third, etc. hash function.
+   */
+  kBlocked64 = 1,
+
+  /** \brief Same as kBlocked64, but uses 512 bit (64 byte) blocks.  This size is chosen to coincide
+   * with common cache line sizes of the same number of bytes, so that lookups can be achieved in a
+   * single cache line fetch (using bitwise SIMD instructions (AVX512) if available).
+   */
+  kBlocked512 = 2,
 };
+
+std::ostream& operator<<(std::ostream& out, BloomFilterLayout layout);
+
+Word64Count min_filter_size(BloomFilterLayout layout) noexcept;
+
+Word64Count block_size(BloomFilterLayout layout, Word64Count filter_size) noexcept;
+
+usize block_count(BloomFilterLayout layout, Word64Count filter_size) noexcept;
+
+/** \brief Parameters used to build a Bloom filter.
+ */
+struct BloomFilterConfig {
+  using Self = BloomFilterConfig;
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  static constexpr BloomFilterLayout kDefaultLayout = BloomFilterLayout::kFlat;
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  BloomFilterLayout layout;
+  Word64Count filter_size;
+  ItemCount key_count;
+  HashCount hash_count;
+  RealBitCount bits_per_key;
+  FalsePositiveRate false_positive_rate;
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  static Self from(BloomFilterLayout layout,  //
+                   ItemCount key_count,       //
+                   FalsePositiveRate false_positive_rate) noexcept;
+
+  static Self from(BloomFilterLayout layout,  //
+                   ItemCount key_count,       //
+                   RealBitCount bits_per_key) noexcept;
+
+  static Self from(BloomFilterLayout layout,  //
+                   Word64Count filter_size,   //
+                   RealBitCount bits_per_key) noexcept;
+
+  static Self from(BloomFilterLayout layout,  //
+                   Word64Count filter_size,   //
+                   HashCount hash_count) noexcept;
+
+  static Self from(BloomFilterLayout layout,  //
+                   Word64Count filter_size,   //
+                   ItemCount key_count) noexcept;
+
+  //----- --- -- -  -  -   -
+  // Definitions:
+  //  - m: filter_size_bits
+  //  - n: key_count
+  //  - k: (optimal) hash_count
+  //  - b: bits_per_key
+  //  - e: target_error_rate
+  //  - p: keys per block
+  //  - q: block count
+  //  - s: block size (bits)
+  //
+  // p = n / q
+  // m = q * s
+  // q = m / s
+  //
+  // Bloom Filter Facts:
+  //
+  // (ln(x) = ln(2) * log2(x))
+  // (ln(2) = ln(x) / log2(x))
+  // (1/ln(2) =~ 1.44)
+  // (1/ln(2)^2 =~ 2.08)
+  // (ln(2) =~ 0.693)
+  //
+  //  - b = m / n                            (definition of bits per key)
+  //  - b = k / ln(2)
+  //  - b = -log2(e) / ln(2)                 (expected false positive rate)
+  //
+  //  - k = ln(2) * b                        (optimal number of hash functions)
+  //  - k = ln(2) * (m / n)
+  //  - k = -log2(e)
+  //
+  //  - e = 1 / 2^k
+  //  - e = 1 / 2^(b * ln(2))
+  //  - e = 1 / 2^(m * ln(2) / n)
+  //
+  //  - m =  n * b
+  //  - m =  n * k / ln(2)
+  //  - m = -n * log2(e) / ln(2)
+  //  - n =  m / b
+  //  - n =  m * ln(2) / k
+  //  - n = -m * ln(2) / log2(e)
+  //
+  // Variable solutions:
+  //
+  //  - m
+  //    - given
+  //    - (n, k)
+  //    - (n, b)
+  //  - n
+  //    - given
+  //    - (m, b)
+  //    - (m, e)
+  //  - k
+  //    - given
+  //    - b
+  //
+  //
+  //----- --- -- -  -  -   -
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  Word64Count block_size() const noexcept;
+  usize block_count() const noexcept;
+  usize word_count() const noexcept;
+};
+
+std::ostream& operator<<(std::ostream& out, const BloomFilterConfig& t);
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 // Implementation details - NOT FOR EXTERNAL USE
@@ -76,8 +206,12 @@ inline constexpr std::array<u64, 64> kBloomFilterHashSeeds = {
 
 // Validate assumption that the number of seeds above is a power of 2.
 //
+namespace {
+
 BATT_STATIC_ASSERT_EQ(u64{1} << (batt::log2_ceil(kBloomFilterHashSeeds.size())),
                       kBloomFilterHashSeeds.size());
+
+}  //namespace
 
 /** \brief Returns the n-th hash function for the given integer value.
  */
@@ -114,23 +248,23 @@ inline u64 get_nth_hash_for_bloom(const T& item, usize n)
 template <typename T>
 struct BloomFilterQuery {
   T key;
-  batt::SmallVec<u64, 24> cached_hash_values;
-  batt::SmallVec<u64, 8> cached_mask;
+  batt::SmallVec<u64, 24> hash;
+  batt::SmallVec<u64, 8> mask;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   template <typename Arg, typename = batt::EnableIfNoShadow<BloomFilterQuery, Arg&&>>
   explicit BloomFilterQuery(Arg&& key_arg) noexcept : key{BATT_FORWARD(key_arg)}
   {
-    this->cached_hash_values.push_back(detail::get_nth_hash_for_bloom(this->key, 0));
+    this->hash.push_back(detail::get_nth_hash_for_bloom(this->key, 0));
   }
 
   void update_cache(usize n_hashes) noexcept
   {
-    usize i = this->cached_hash_values.size();
+    usize i = this->hash.size();
     if (BATT_HINT_FALSE(i < n_hashes)) {
       do {
-        this->cached_hash_values.push_back(detail::get_nth_hash_for_bloom(this->key, i));
+        this->hash.push_back(detail::get_nth_hash_for_bloom(this->key, i));
         ++i;
       } while (i != n_hashes);
     }
@@ -140,13 +274,18 @@ struct BloomFilterQuery {
   {
     switch (block_size) {
       case 1: {
-        if (BATT_HINT_FALSE(this->cached_mask.size() != 1)) {
+        if (BATT_HINT_FALSE(this->mask.size() != 1)) {
           this->update_cache((n_hashes + 9) / 10 + 1);
-          this->cached_mask.resize(1, 0);
+          this->mask.resize(1, 0);
 
           for (usize hash_i = 0, src_val_j = 1, shift = 0; hash_i < n_hashes; ++hash_i) {
-            const usize bit_i = ((this->cached_hash_values[src_val_j] >> shift) & 0b111111ull);
-            this->cached_mask[0] |= u64{1} << bit_i;
+            BATT_CHECK_LT(src_val_j, this->hash.size());
+
+            const usize bit_i = ((this->hash[src_val_j] >> shift) & 0b111111ull);
+
+            BATT_CHECK_LT(bit_i, 64);
+
+            this->mask[0] |= u64{1} << bit_i;
             shift += 6;
             if (shift == 66) {
               shift = 0;
@@ -157,14 +296,20 @@ struct BloomFilterQuery {
         break;
       }
       case 8: {
-        if (BATT_HINT_FALSE(this->cached_mask.size() != 8)) {
+        if (BATT_HINT_FALSE(this->mask.size() != 8)) {
           this->update_cache((n_hashes + 5) / 6 + 1);
-          this->cached_mask.resize(8, 0);
+          this->mask.resize(8, 0);
 
           for (usize hash_i = 0, src_val_j = 1, shift = 0; hash_i < n_hashes; ++hash_i) {
-            const usize mask_word_i = (this->cached_hash_values[src_val_j] >> shift) & 0b111ull;
-            const usize bit_i = (this->cached_hash_values[src_val_j] >> (shift + 3)) & 0b111111ull;
-            this->cached_mask[mask_word_i] |= u64{1} << bit_i;
+            BATT_CHECK_LT(src_val_j, this->hash.size());
+
+            const usize mask_word_i = (this->hash[src_val_j] >> shift) & 0b111ull;
+            const usize bit_i = (this->hash[src_val_j] >> (shift + 3)) & 0b111111ull;
+
+            BATT_CHECK_LT(mask_word_i, 8);
+            BATT_CHECK_LT(bit_i, 64);
+
+            this->mask[mask_word_i] |= u64{1} << bit_i;
             shift += 9;
             if (shift == 72) {
               shift = 0;
@@ -180,6 +325,8 @@ struct BloomFilterQuery {
     }
   }
 };
+
+#if 0
 
 /** \brief Invokes `fn` `count` times, each time with a unique hash function applied to `item`.
  *
@@ -209,6 +356,8 @@ inline double optimal_bloom_filter_bit_rate(double target_false_positive_P)
   return -std::log(target_false_positive_P) * log_phi_e;
 }
 
+#endif
+
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 
 struct PackedBloomFilter {
@@ -216,15 +365,15 @@ struct PackedBloomFilter {
 
   /** \brief All items are inserted into a flat address space.
    */
-  static constexpr u8 kLayoutFlat = 0;
+  static constexpr u8 kLayoutFlat = static_cast<u8>(BloomFilterLayout::kFlat);
 
   /** \brief Use blocks of size 8 bytes (64 bits) for item addressing.
    */
-  static constexpr u8 kLayoutBlocked64 = 1;
+  static constexpr u8 kLayoutBlocked64 = static_cast<u8>(BloomFilterLayout::kBlocked64);
 
   /** \brief Use blocks of size 64 bytes (512 bits) for item addressing.
    */
-  static constexpr u8 kLayoutBlocked512 = 2;
+  static constexpr u8 kLayoutBlocked512 = static_cast<u8>(BloomFilterLayout::kBlocked512);
 
   // The size of the filter in 64-bit words.
   //
@@ -233,15 +382,17 @@ struct PackedBloomFilter {
   //
   little_u64 word_count_;
 
+  // The number of blocks in this filter (1 == flat layout).
+  //
   little_u64 block_count_;
 
   // The number of hash functions used.
   //
-  little_u16 hash_count;
+  little_u16 hash_count_;
 
   // The layout for this filter.
   //
-  little_u8 layout;
+  little_u8 layout_;
 
   // The ceiling of log2(word_count).
   //
@@ -261,17 +412,19 @@ struct PackedBloomFilter {
 
   // Align to 64-bit boundary.
   //
-  little_u8 reserved_[1];
+  little_u8 reserved_[41];
 
   // TODO [tastolfi 2025-02-01] - make sure words is cache-line aligned (esp. for blocked512
   // layout!)
 
   // The actual filter array starts here (it will probably be larger than one element...)
   //
-  little_u64 words[1];
+  little_u64 words[0];
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 
+#if 0
+    {
   // Approximate value of ln(2) * 65536 (fixed point, 16 bits decimal).
   //
   static constexpr u64 kLn2Fixed16 = 45426;
@@ -305,7 +458,7 @@ struct PackedBloomFilter {
       return optimal_hash_count(512, items_per_block, Self::kLayoutFlat);
     }
 
-    BATT_PANIC() << "Invalid layout: " << (int)layout;
+    BATT_PANIC() << "Invalid layout: " << (i32)layout;
     BATT_UNREACHABLE();
   }
 
@@ -316,72 +469,30 @@ struct PackedBloomFilter {
     filter.initialize(params, item_count, layout);
     return filter;
   }
+    }
+#endif
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  void initialize(const BloomFilterParams& params, usize item_count,
-                  u8 layout = PackedBloomFilter::kLayoutFlat) noexcept
-  {
-    const usize num_words = word_count_from_bit_count(params.bits_per_item * item_count);
-    const usize filter_bit_count = num_words * 64;
+  void initialize(const BloomFilterConfig& config) noexcept;
 
-    this->initialize_direct(num_words, optimal_hash_count(filter_bit_count, item_count, layout),
-                            layout);
+  void check_invariants() const noexcept;
+
+  BloomFilterLayout layout() const noexcept
+  {
+    return static_cast<BloomFilterLayout>(this->layout_.value());
   }
 
-  void initialize_direct(u64 n_words, u16 n_hash, u8 layout) noexcept
+  usize hash_count() const noexcept
   {
-    [[maybe_unused]] static const bool init = [] {
-#ifdef __AVX512F__
-      LLFS_LOG_INFO() << "AVX512 enabled";
-#else
-      LLFS_LOG_INFO() << "AVX512 NOT enabled";
-#endif
-      return true;
-    }();
-
-    this->layout = layout;
-    this->word_count_ = n_words;
-
-    //----- --- -- -  -  -   -
-    switch (this->layout) {
-      case PackedBloomFilter::kLayoutBlocked64:
-        this->block_count_ = this->word_count_;
-        break;
-
-      case PackedBloomFilter::kLayoutBlocked512:
-        this->block_count_ = this->word_count_ / 8;
-        break;
-
-      case PackedBloomFilter::kLayoutFlat:  // fall-through
-      default:
-        this->block_count_ = 1;
-        break;
-    }
-    //----- --- -- -  -  -   -
-
-    this->word_count_pre_mul_shift_ = batt::log2_ceil(n_words) + 1;
-    this->word_count_post_mul_shift_ = 64 - this->word_count_pre_mul_shift_;
-    this->block_count_pre_mul_shift_ = batt::log2_ceil(this->block_count_) + 1;
-    this->block_count_post_mul_shift_ = 64 - this->block_count_pre_mul_shift_;
-    this->hash_count = n_hash;
+    return this->hash_count_;
   }
 
   /** \brief Returns the block size (in 64-bit words).
    */
   u64 block_size() const noexcept
   {
-    switch (this->layout) {
-      case PackedBloomFilter::kLayoutBlocked64:
-        return 1;
-
-      case PackedBloomFilter::kLayoutBlocked512:
-        return 8;
-
-      case PackedBloomFilter::kLayoutFlat:  // fall-through
-      default:
-        return this->word_count_;
-    }
+    return ::llfs::block_size(this->layout(), Word64Count{this->word_count()});
   }
 
   /** \brief Returns the number of blocks.
@@ -398,7 +509,7 @@ struct PackedBloomFilter {
 
     // TODO [tastolfi 2025-02-01] Add unit test.
     //
-    BATT_ASSERT_LT(ans, this->word_count_)
+    BATT_CHECK_LT(ans, this->word_count_)
         << BATT_INSPECT((i32)this->word_count_pre_mul_shift_) << std::endl
         << BATT_INSPECT((i32)this->word_count_post_mul_shift_) << std::endl
         << BATT_INSPECT(this->word_count_) << std::endl
@@ -423,9 +534,10 @@ struct PackedBloomFilter {
 
     // TODO [tastolfi 2025-02-01] Add unit test.
     //
-    BATT_ASSERT_LT(ans, this->block_count_)
+    BATT_CHECK_LT(ans, this->block_count_)
         << BATT_INSPECT((i32)this->block_count_pre_mul_shift_) << std::endl
         << BATT_INSPECT((i32)this->block_count_post_mul_shift_) << std::endl
+        << BATT_INSPECT(this->word_count_) << std::endl
         << BATT_INSPECT(this->block_count_) << std::endl
         << [&](std::ostream& out) {
              std::bitset<64> a{hash_val};
@@ -456,7 +568,7 @@ struct PackedBloomFilter {
   template <typename T>
   bool query_flat(BloomFilterQuery<T>& query) const noexcept
   {
-    const usize n_hashes = this->hash_count.value();
+    const usize n_hashes = this->hash_count();
 
     // First cache any hash values that aren't already cached.
     //
@@ -465,7 +577,7 @@ struct PackedBloomFilter {
     // Now test each hash against the bitmap.
     //
     for (usize i = 0; i < n_hashes; ++i) {
-      if (!this->test_hash_value_flat(query.cached_hash_values[i])) {
+      if (!this->test_hash_value_flat(query.hash[i])) {
         return false;
       }
     }
@@ -475,27 +587,29 @@ struct PackedBloomFilter {
   template <typename T>
   bool query_blocked64(BloomFilterQuery<T>& query) const noexcept
   {
-    const usize n_hashes = this->hash_count.value();
+    const usize n_hashes = this->hash_count();
 
     query.update_mask(n_hashes, /*block_size=*/1);
 
-    const usize block_i = this->block_index_from_hash(query.cached_hash_values[0]);
+    const usize block_i = this->block_index_from_hash(query.hash[0]);
 
-    return (this->words[block_i] & query.cached_mask[0]) == query.cached_mask[0];
+    return (this->words[block_i] & query.mask[0]) == query.mask[0];
   }
 
   template <typename T>
   bool query_blocked512(BloomFilterQuery<T>& query) const noexcept
   {
-    const usize n_hashes = this->hash_count.value();
+    const usize n_hashes = this->hash_count();
 
     query.update_mask(n_hashes, /*block_size=*/8);
 
-    const usize block_i = this->block_index_from_hash(query.cached_hash_values[0]);
+    const usize block_i = this->block_index_from_hash(query.hash[0]);
     const usize block_first_word_i = block_i * 8;
 
     const i64* const block_p = (const i64*)&this->words[block_first_word_i];
-    const i64* const query_p = (const i64*)&query.cached_mask[0];
+    const i64* const query_p = (const i64*)&query.mask[0];
+
+    BATT_CHECK_EQ(query.mask.size(), 8);
 
 #ifdef __AVX512F__
 
@@ -527,20 +641,20 @@ struct PackedBloomFilter {
   template <typename T>
   bool query(BloomFilterQuery<T>& query) const noexcept
   {
-    switch (this->layout) {
-      case PackedBloomFilter::kLayoutFlat:
+    switch (this->layout()) {
+      case BloomFilterLayout::kFlat:
         return this->query_flat(query);
 
-      case PackedBloomFilter::kLayoutBlocked64:
+      case BloomFilterLayout::kBlocked64:
         return this->query_blocked64(query);
 
-      case PackedBloomFilter::kLayoutBlocked512:
+      case BloomFilterLayout::kBlocked512:
         return this->query_blocked512(query);
 
       default:
         break;
     }
-    BATT_PANIC() << "Invalid layout=" << this->layout;
+    BATT_PANIC() << "Invalid layout=" << this->layout();
     BATT_UNREACHABLE();
   }
 
@@ -551,20 +665,20 @@ struct PackedBloomFilter {
   {
     BloomFilterQuery<const T&> query{item};
 
-    switch (this->layout) {
-      case PackedBloomFilter::kLayoutFlat:
+    switch (this->layout()) {
+      case BloomFilterLayout::kFlat:
         return this->query_flat(query);
 
-      case PackedBloomFilter::kLayoutBlocked64:
+      case BloomFilterLayout::kBlocked64:
         return this->query_blocked64(query);
 
-      case PackedBloomFilter::kLayoutBlocked512:
+      case BloomFilterLayout::kBlocked512:
         return this->query_blocked512(query);
 
       default:
         break;
     }
-    BATT_PANIC() << "Invalid layout=" << this->layout;
+    BATT_PANIC() << "Invalid layout=" << this->layout();
     BATT_UNREACHABLE();
   }
 
@@ -573,33 +687,37 @@ struct PackedBloomFilter {
   template <typename T>
   void insert_flat(const T& item) noexcept
   {
-    hash_for_bloom(item, this->hash_count, [this](u64 h) {
+    for (usize hash_i = 0; hash_i < this->hash_count(); ++hash_i) {
+      const u64 h = detail::get_nth_hash_for_bloom(item, hash_i);
       this->words[this->word_index_from_hash(h)] |= this->bit_mask_from_hash(h);
-    });
+    }
   }
 
   template <typename T>
   void insert_blocked64(const T& item) noexcept
   {
     BloomFilterQuery<const T&> query{item};
-    query.update_mask(this->hash_count.value(), /*block_size=*/1);
+    query.update_mask(this->hash_count(), /*block_size=*/1);
 
-    const usize block_i = this->block_index_from_hash(query.cached_hash_values[0]);
+    const usize block_i = this->block_index_from_hash(query.hash[0]);
 
-    this->words[block_i] |= query.cached_mask[0];
+    this->words[block_i] |= query.mask[0];
   }
 
   template <typename T>
   void insert_blocked512(const T& item) noexcept
   {
     BloomFilterQuery<const T&> query{item};
-    query.update_mask(this->hash_count.value(), /*block_size=*/8);
+    query.update_mask(this->hash_count(), /*block_size=*/8);
 
-    const usize block_i = this->block_index_from_hash(query.cached_hash_values[0]);
+    const usize block_i = this->block_index_from_hash(query.hash[0]);
     const usize block_first_word_i = block_i * 8;
 
+    BATT_CHECK_LE(block_first_word_i + 8, this->word_count());
+    BATT_CHECK_EQ(query.mask.size(), 8);
+
     i64* const block_p = (i64*)&this->words[block_first_word_i];
-    const i64* const mask_p = (const i64*)&query.cached_mask[0];
+    const i64* const mask_p = (const i64*)&query.mask[0];
 
     block_p[0] |= mask_p[0];
     block_p[1] |= mask_p[1];
@@ -614,23 +732,23 @@ struct PackedBloomFilter {
   template <typename T>
   void insert(const T& item) noexcept
   {
-    switch (this->layout) {
-      case PackedBloomFilter::kLayoutFlat:
+    switch (this->layout()) {
+      case BloomFilterLayout::kFlat:
         this->insert_flat(item);
         return;
 
-      case PackedBloomFilter::kLayoutBlocked64:
+      case BloomFilterLayout::kBlocked64:
         this->insert_blocked64(item);
         return;
 
-      case PackedBloomFilter::kLayoutBlocked512:
+      case BloomFilterLayout::kBlocked512:
         this->insert_blocked512(item);
         return;
 
       default:
         break;
     }
-    BATT_PANIC() << "Invalid layout=" << this->layout;
+    BATT_PANIC() << "Invalid layout=" << this->layout();
     BATT_UNREACHABLE();
   }
 
@@ -648,18 +766,33 @@ struct PackedBloomFilter {
   {
     return batt::as_slice(this->words, this->word_count());
   }
+
+  auto dump() const noexcept
+  {
+    return [this](std::ostream& out) {
+      usize offset = 0;
+      for (const little_u64& w : this->get_words()) {
+        out << std::endl
+            << batt::to_string(std::hex, std::setw(8), offset) << ": "
+            << std::bitset<64>{w.value()};
+        offset += sizeof(little_u64);
+      }
+    };
+  }
 };
 
-BATT_STATIC_ASSERT_EQ(sizeof(PackedBloomFilter), 32);
+namespace {
+BATT_STATIC_ASSERT_EQ(sizeof(PackedBloomFilter), 64);
+}  // namespace
 
-inline usize packed_sizeof(const PackedBloomFilter& filter)
+inline usize packed_sizeof(const PackedBloomFilter& filter) noexcept
 {
-  return sizeof(PackedBloomFilter) + sizeof(little_u64) * filter.word_count_;
+  return sizeof(PackedBloomFilter) + sizeof(little_u64) * filter.word_count();
 }
 
-inline usize packed_sizeof_bloom_filter(const BloomFilterParams& params, usize item_count)
+inline usize packed_sizeof_bloom_filter(const BloomFilterConfig& config) noexcept
 {
-  return packed_sizeof(PackedBloomFilter::from_params(params, item_count));
+  return sizeof(PackedBloomFilter) + to_bytes(config.filter_size);
 }
 
 template <typename Iter, typename GetKeyFn>
@@ -677,7 +810,7 @@ void parallel_build_bloom_filter(batt::WorkerPool& worker_pool, Iter first, Iter
 
   const batt::WorkSliceParams stage1_params{
       .min_task_size =
-          batt::TaskSize{u64(1024 /*?*/ + filter->hash_count - 1) / filter->hash_count},
+          batt::TaskSize{u64(1024 /*?*/ + filter->hash_count() - 1) / filter->hash_count()},
       .max_tasks = batt::TaskCount{worker_pool.size() + 1},
   };
 
@@ -692,11 +825,17 @@ void parallel_build_bloom_filter(batt::WorkerPool& worker_pool, Iter first, Iter
   const batt::TaskCount n_input_shards = stage1_plan.n_tasks;
 
   const usize filter_size = packed_sizeof(*filter);
-  std::unique_ptr<u8[]> temp_memory{new u8[filter_size * n_input_shards]};
-  batt::SmallVec<PackedBloomFilter*, 48> temp_filters;
+  const usize filter_word_size = filter_size / 8;
+
+  BATT_CHECK_EQ(filter_size, sizeof(PackedBloomFilter) + filter->word_count() * sizeof(u64));
+
+  using AlignedUnit = std::aligned_storage_t<64, 64>;
+
+  std::unique_ptr<AlignedUnit[]> temp_memory{new AlignedUnit[filter_word_size * n_input_shards]};
+  batt::SmallVec<PackedBloomFilter*, 32> temp_filters;
   {
-    u8* ptr = temp_memory.get();
-    for (usize i = 0; i < n_input_shards; ++i, ptr += filter_size) {
+    AlignedUnit* ptr = temp_memory.get();
+    for (usize i = 0; i < n_input_shards; ++i, ptr += filter_word_size) {
       auto* partial = reinterpret_cast<PackedBloomFilter*>(ptr);
       *partial = *filter;
       temp_filters.emplace_back(partial);

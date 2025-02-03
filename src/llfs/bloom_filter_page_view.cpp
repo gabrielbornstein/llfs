@@ -44,6 +44,7 @@ namespace llfs {
     : PageView{std::move(page_buffer)}
     , packed_{static_cast<const PackedBloomFilterPage*>(this->const_payload().data())}
 {
+  this->packed_->bloom_filter.check_invariants();
 }
 
 }  //namespace llfs

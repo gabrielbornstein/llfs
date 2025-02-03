@@ -9,6 +9,8 @@
 #include <llfs/page_filter_builder_task.hpp>
 //
 
+#include <xxhash.h>
+
 namespace llfs {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -75,6 +77,35 @@ Status PageFilterBuilderTask::push(llfs::PinnedPage&& src_page) noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+template <typename LockT>
+std::shared_ptr<LockT> PageFilterBuilderTask::lock_page(PageId filter_page_id,
+                                                        batt::StaticType<LockT>) noexcept
+{
+  // Hash the physical page number.
+  //
+  const u64 physical_page = this->filter_page_ids_.get_physical_page(filter_page_id);
+  const u64 hash_val = XXH64(&physical_page, sizeof(physical_page), (u64)this);
+
+  // This page belongs to the shard defined by hash mod num_locks.
+  //
+  const usize lock_i = hash_val & (Self::kNumLocks - 1);
+
+  // Acquire and return the lock.
+  //
+  return std::make_shared<LockT>(this->locks_[lock_i]);
+}
+
+//----- --- -- -  -  -   -
+// Explicitly instantiate the Reader lock and Writer lock cases.
+//
+template std::shared_ptr<batt::ReadWriteLock::Reader> PageFilterBuilderTask::lock_page(
+    PageId filter_page_id, batt::StaticType<batt::ReadWriteLock::Reader>) noexcept;
+
+template std::shared_ptr<batt::ReadWriteLock::Writer> PageFilterBuilderTask::lock_page(
+    PageId filter_page_id, batt::StaticType<batt::ReadWriteLock::Writer>) noexcept;
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 void PageFilterBuilderTask::process_queue() noexcept
 {
   // Builder thread main loop.
@@ -126,9 +157,14 @@ void PageFilterBuilderTask::process_queue() noexcept
 
     // Start writing the page asynchronously.
     //
-    this->filter_device_->write(std::move(*filter_buffer), [](batt::Status /*ignored_for_now*/) {
-      // TODO [tastolfi 2025-01-06] add to cache?
-    });
+    this->filter_device_->write(
+        std::move(*filter_buffer),
+        [writer_lock =
+             this->lock_page(filter_page_id, batt::StaticType<batt::ReadWriteLock::Writer>{})](
+            batt::Status /*ignored_for_now*/) mutable {
+          writer_lock = nullptr;
+          // TODO [tastolfi 2025-01-06] add to cache?
+        });
   }
 }
 

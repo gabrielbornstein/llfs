@@ -1,3 +1,4 @@
+#if 0
 //#=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
 //
 // Part of the LLFS Project, under Apache License v2.0.
@@ -41,3 +42,4 @@ bool PageBloomFilter::might_contain_key(const KeyView& key)
 }
 
 }  // namespace llfs
+#endif

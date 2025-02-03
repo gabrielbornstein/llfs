@@ -19,7 +19,10 @@
 #include <llfs/status.hpp>
 
 #include <batteries/async/queue.hpp>
+#include <batteries/async/read_write_lock.hpp>
 #include <batteries/async/task.hpp>
+#include <batteries/math.hpp>
+#include <batteries/type_traits.hpp>
 
 #include <atomic>
 #include <memory>
@@ -29,6 +32,16 @@ namespace llfs {
 class PageFilterBuilderTask
 {
  public:
+  using Self = PageFilterBuilderTask;
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  static constexpr usize kNumLocks = 32;
+
+  static_assert(__builtin_popcountll(Self::kNumLocks) == 1, "kNumLocks must be a power of 2");
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
   struct Metrics {
     RateMetric<i64, 15 /*seconds*/> push_rate_15s;
 
@@ -44,6 +57,8 @@ class PageFilterBuilderTask
 
     CountMetric<i64> build_error_count{0};
   };
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   explicit PageFilterBuilderTask(batt::TaskScheduler& task_scheduler,
                                  std::unique_ptr<PageFilterBuilder>&& filter_builder,
@@ -69,6 +84,12 @@ class PageFilterBuilderTask
 
   Status push(llfs::PinnedPage&& src_page) noexcept;
 
+  /** \brief LockT must be batt::ReadWriteLock::Reader or batt::ReadWriteLock::Writer.
+   */
+  template <typename LockT>
+  std::shared_ptr<LockT> lock_page(PageId filter_page_id,
+                                   batt::StaticType<LockT> type_of_lock = {}) noexcept;
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
   void process_queue() noexcept;
@@ -90,6 +111,8 @@ class PageFilterBuilderTask
   batt::Queue<llfs::PinnedPage> queue_;
 
   std::atomic<bool> halt_requested_{false};
+
+  std::array<batt::ReadWriteLock, kNumLocks> locks_;
 
   batt::Task task_;
 };

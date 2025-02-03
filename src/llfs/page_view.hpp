@@ -17,8 +17,8 @@
 #include <llfs/page_filter.hpp>
 #include <llfs/page_id.hpp>
 #include <llfs/page_layout.hpp>
-//#include <llfs/page_loader.hpp>
 #include <llfs/seq.hpp>
+#include <llfs/slice.hpp>
 #include <llfs/stable_string_store.hpp>
 #include <llfs/user_data.hpp>
 
@@ -29,6 +29,23 @@
 #include <type_traits>
 
 namespace llfs {
+
+// TODO [tastolfi 2025-02-03] Remove this.
+//
+class PageFilter
+{
+};
+
+// TODO [tastolfi 2025-02-03] Remove this.
+//
+class NullPageFilter : public PageFilter
+{
+ public:
+  template <typename... Args>
+  NullPageFilter(Args&&...)
+  {
+  }
+};
 
 class PageView
 {

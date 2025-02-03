@@ -89,9 +89,37 @@ BATT_STRONG_TYPEDEF(bool, HasOutgoingRefs);
  */
 BATT_STRONG_TYPEDEF(usize, ItemOffset);
 
+/** \brief A count of items.
+ */
+BATT_STRONG_TYPEDEF(usize, ItemCount);
+
+/** \brief A count of hash functions.
+ */
+BATT_STRONG_TYPEDEF(usize, HashCount);
+
 /** \brief A pseudo-random number generator seed.
  */
 BATT_STRONG_TYPEDEF(u32, RandomSeed);
+
+/** \brief A number of bytes.
+ */
+BATT_STRONG_TYPEDEF(usize, ByteCount);
+
+/** \brief A integer number of bits.
+ */
+BATT_STRONG_TYPEDEF(usize, BitCount);
+
+/** \brief A real number of bits.
+ */
+BATT_STRONG_TYPEDEF(double, RealBitCount);
+
+/** \brief A number of 64-bit words.
+ */
+BATT_STRONG_TYPEDEF(usize, Word64Count);
+
+/** \brief A false-positive error rate.
+ */
+BATT_STRONG_TYPEDEF(double, FalsePositiveRate);
 
 }  // namespace llfs
 

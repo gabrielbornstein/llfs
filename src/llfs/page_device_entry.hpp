@@ -36,6 +36,11 @@ struct PageDeviceEntry {
    */
   bool can_alloc = true;
 
+  /** \brief If this device is being used as filter page storage for some _other_ device, this
+   * points at the builder task for that device's entry.
+   */
+  PageFilterBuilderTask* owning_filter_builder = nullptr;
+
   /** \brief The task building filters for pages on this device.
    */
   std::unique_ptr<PageFilterBuilderTask> filter_builder_task;

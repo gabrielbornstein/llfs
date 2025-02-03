@@ -260,12 +260,14 @@ Status PageCache::set_filter_builder(batt::TaskScheduler& task_scheduler, PageSi
     return batt::StatusCode::kNotFound;
   }
 
-  found_filter_entry->can_alloc = false;
   found_src_entry->filter_builder_task =
       std::make_unique<PageFilterBuilderTask>(task_scheduler,                                   //
                                               std::move(filter_builder),                        //
                                               std::addressof(found_src_entry->arena.device()),  //
                                               std::addressof(found_filter_entry->arena.device()));
+
+  found_filter_entry->can_alloc = false;
+  found_filter_entry->owning_filter_builder = found_src_entry->filter_builder_task.get();
 
   return OkStatus();
 }
@@ -715,9 +717,21 @@ void PageCache::async_load_page_into_slot(const PageCacheSlot::PinnedRef& pinned
   PageDeviceEntry* const entry = this->get_device_for_page(page_id);
   BATT_CHECK_NOT_NULLPTR(entry);
 
+  auto reader_lock = [&]() -> std::shared_ptr<batt::ReadWriteLock::Reader> {
+    if (entry->owning_filter_builder) {
+      return entry->owning_filter_builder->lock_page(
+          page_id, batt::StaticType<batt::ReadWriteLock::Reader>{});
+    }
+    return nullptr;
+  }();
+
   entry->arena.device().read(
       page_id,
       /*read_handler=*/[this, required_layout, ok_if_not_found,
+
+                        // Serialize read/write access to this page with the filter builder.
+                        //
+                        reader_lock = std::move(reader_lock),
 
                         // Save the metrics and start time so we can record read latency etc.
                         //
@@ -729,6 +743,10 @@ void PageCache::async_load_page_into_slot(const PageCacheSlot::PinnedRef& pinned
                         pinned_slot = batt::make_copy(pinned_slot)
 
   ](StatusOr<std::shared_ptr<const PageBuffer>>&& result) mutable {
+        // Release the reader lock.
+        //
+        reader_lock = nullptr;
+
         const PageId page_id = pinned_slot.key();
         auto* p_metrics = &this->metrics_;
         auto page_readers = this->page_readers_;
