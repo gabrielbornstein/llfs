@@ -86,6 +86,8 @@ TEST(BloomFilterTest, RandomItems)
 
   using AlignedUnit = std::aligned_storage_t<64, 64>;
 
+  const double kFPRTolerance = 0.075;
+
   // Construct and verify properties of filters with various values of N, M, and layout
   //
   //----- --- -- -  -  -   -
@@ -170,7 +172,8 @@ TEST(BloomFilterTest, RandomItems)
             }
             actual_fpr = false_positive_count / negative_query_count;
 
-            if (false_positive_count > 1000 && std::abs(actual_fpr - expected_fpr) < 0.1) {
+            if (false_positive_count > 1000 &&
+                std::abs(actual_fpr - expected_fpr) < kFPRTolerance) {
               break;
             }
             if (negative_query_count > 1000 * 1000 && false_positive_count == 0) {
@@ -183,7 +186,7 @@ TEST(BloomFilterTest, RandomItems)
                 << BATT_INSPECT(false_positive_count) << BATT_INSPECT(negative_query_count)
                 << BATT_INSPECT(config) << filter->dump();
           } else {
-            ASSERT_THAT(actual_fpr, ::testing::DoubleNear(expected_fpr, 0.1))
+            ASSERT_THAT(actual_fpr, ::testing::DoubleNear(expected_fpr, kFPRTolerance))
                 << BATT_INSPECT(false_positive_count) << BATT_INSPECT(negative_query_count)
                 << BATT_INSPECT(config) << filter->dump();
           }
