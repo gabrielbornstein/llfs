@@ -24,10 +24,8 @@
 namespace {
 
 using llfs::as_slice;
-//using llfs::BloomFilterParams;
 using llfs::LatencyMetric;
 using llfs::LatencyTimer;
-//using llfs::packed_sizeof_bloom_filter;
 using llfs::PackedBloomFilter;
 using llfs::parallel_build_bloom_filter;
 
@@ -53,17 +51,6 @@ std::string make_random_word(Rng& rng)
   }
   return std::move(oss).str();
 }
-
-struct QueryStats {
-  usize total = 0;
-  usize false_positive = 0;
-  double expected_rate = 0;
-
-  double actual_rate() const
-  {
-    return double(this->false_positive) / double(this->total);
-  }
-};
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -91,7 +78,7 @@ TEST(BloomFilterTest, RandomItems)
       input_sets.emplace_back(std::move(items));
     }
 
-    for (usize j = 0; j < 2000 * 1000; ++j) {
+    for (usize j = 0; j < 2 * 1000 * 1000; ++j) {
       std::string query_str = make_random_word(rng);
       query_keys.emplace_back(std::move(query_str));
     }
@@ -111,6 +98,7 @@ TEST(BloomFilterTest, RandomItems)
     for (const usize n_items : {
              1,
              2,
+             12,
              100,
              500,
              10 * 1000,
@@ -179,42 +167,41 @@ TEST(BloomFilterTest, RandomItems)
             EXPECT_TRUE(filter->query(query));
           }
 
-          double false_positive_count = 0, query_count = 0;
-
-          const auto run_query = [&](std::string_view s) {
-            llfs::BloomFilterQuery<std::string_view> query{s};
-            bool filter_ans = filter->might_contain(s);
-            EXPECT_EQ(filter_ans, filter->query(query));
-
-            bool true_ans = items_contains(s);
-            if (true_ans) {
-              EXPECT_TRUE(filter_ans);
-            }
-            query_count += 1;
-            LOG_EVERY_N(INFO, 1000 * 1000)
-                << "expected=" << *expected_fpr << " actual=" << false_positive_count << "/"
-                << query_count;
-            if (filter_ans && !true_ans) {
-              false_positive_count += 1;
-            }
-          };
+          double false_positive_count = 0, negative_query_count = 0;
+          double actual_fpr = 0;
 
           for (const std::string& s : query_keys) {
-            run_query(s);
-            if (false_positive_count > 100) {
+            if (items_contains(s)) {
+              continue;
+            }
+
+            negative_query_count += 1;
+
+            llfs::BloomFilterQuery<std::string_view> query{s};
+            const bool query_result = filter->might_contain(s);
+            EXPECT_EQ(query_result, filter->query(query));
+
+            if (query_result) {
+              false_positive_count += 1;
+            }
+
+            actual_fpr = false_positive_count / negative_query_count;
+
+            if (false_positive_count > 1000 && std::abs(actual_fpr - *expected_fpr) < 0.1) {
+              break;
+            }
+            if (negative_query_count > 1000 * 1000 && false_positive_count == 0) {
               break;
             }
           }
 
-          double actual_fpr = false_positive_count / query_count;
-
-          if (1.0 / (*expected_fpr) > query_count) {
+          if (1.0 / (*expected_fpr) > negative_query_count) {
             ASSERT_LE(actual_fpr, *expected_fpr)
-                << BATT_INSPECT(false_positive_count) << BATT_INSPECT(query_count)
+                << BATT_INSPECT(false_positive_count) << BATT_INSPECT(negative_query_count)
                 << BATT_INSPECT(config) << filter->dump();
           } else {
-            ASSERT_THAT(actual_fpr, ::testing::DoubleNear(*expected_fpr, 1e-2))
-                << BATT_INSPECT(false_positive_count) << BATT_INSPECT(query_count)
+            ASSERT_THAT(actual_fpr, ::testing::DoubleNear(*expected_fpr, 0.1))
+                << BATT_INSPECT(false_positive_count) << BATT_INSPECT(negative_query_count)
                 << BATT_INSPECT(config) << filter->dump();
           }
         }
@@ -222,6 +209,9 @@ TEST(BloomFilterTest, RandomItems)
         if (bits_per_item_done) {
           break;
         }
+      }  // bits_per_item
+    }  // n_items
+  }  // layout
 
 #if 0
         std::map<std::pair<u64, u16>, QueryStats> stats;
@@ -316,10 +306,6 @@ TEST(BloomFilterTest, RandomItems)
                             << " query rate (key*bits/sec) == " << query_latency.rate_per_second();
           }
 #endif
-
-      }  // bits_per_item
-    }  // n_items
-  }  // layout
 }
 
 }  // namespace

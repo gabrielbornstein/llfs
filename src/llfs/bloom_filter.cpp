@@ -84,10 +84,10 @@ usize block_count(BloomFilterLayout layout, Word64Count filter_size) noexcept
       return 1;
 
     case BloomFilterLayout::kBlocked64:
-      return filter_size;
+      return to_bits(filter_size) / 64;
 
     case BloomFilterLayout::kBlocked512:
-      return to_word64(BitCount{to_bits(filter_size) / 512});
+      return to_bits(filter_size) / 512;
 
     default:
       break;
