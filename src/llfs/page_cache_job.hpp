@@ -47,6 +47,7 @@ class PageCacheJob : public PageLoader
     kDebugLogUnpinAll = 1,
     kDebugLogPrune = 2,
     kDebugLogCacheSlotsFull = 3,
+    kDebugLogCacheMetricsOnRetry = 4,
     kDebugMaskSize
   };
 
@@ -97,6 +98,27 @@ class PageCacheJob : public PageLoader
 
   static constexpr usize kObsoletePagesPreallocCount = 256;
 
+  static const batt::ExponentialBackoff& default_cache_insert_backoff_policy() noexcept;
+
+  struct ScopedBackoffPolicy {
+    explicit ScopedBackoffPolicy(PageCacheJob& job,
+                                 const batt::ExponentialBackoff* new_policy) noexcept
+        : job_{job}
+        , old_policy_{this->job_.swap_cache_insert_backoff_policy(new_policy)}
+    {
+    }
+
+    ~ScopedBackoffPolicy() noexcept
+    {
+      this->job_.swap_cache_insert_backoff_policy(this->old_policy_);
+    }
+
+    //----- --- -- -  -  -   -
+
+    PageCacheJob& job_;
+    const batt::ExponentialBackoff* old_policy_;
+  };
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   const u64 job_id = counter().fetch_add(1);
@@ -125,6 +147,23 @@ class PageCacheJob : public PageLoader
   void set_base_job(const FinalizedPageCacheJob& base_job);
 
   Status await_base_job_durable() const;
+
+  /** \brief Sets a new backoff-and-retry policy for failed cache inserts on page load, returning
+   * the previously installed policy.
+   *
+   * When a page is loaded through this job, it needs to be placed in the cache.  If slots in the
+   * cache are allocated and pinned, then no slots can be evicted.  In this case, the default
+   * behavior for the job is to wait for some small amount, then retry.  The retry delay (backoff)
+   * increases by a small constant factor each time we retry, up to some maximum retry limit (\see
+   * PageCacheJob::default_cache_insert_backoff_policy).
+   */
+  const batt::ExponentialBackoff* swap_cache_insert_backoff_policy(
+      const batt::ExponentialBackoff* new_policy) noexcept
+  {
+    const batt::ExponentialBackoff* const old_policy = this->cache_insert_backoff_policy_;
+    this->cache_insert_backoff_policy_ = new_policy;
+    return old_policy;
+  }
 
   // Returns true iff the given page id refers to a new page allocated within the scope of this job
   // via `new_page`.
@@ -380,6 +419,8 @@ class PageCacheJob : public PageLoader
   std::ostringstream debug_;
   FinalizedPageCacheJob base_job_;
   u64 base_job_id_{0};
+  const batt::ExponentialBackoff* cache_insert_backoff_policy_ =
+      std::addressof(PageCacheJob::default_cache_insert_backoff_policy());
 };
 
 }  // namespace llfs

@@ -54,6 +54,22 @@ usize get_page_cache_job_unpin_count()
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+/*static*/ const batt::ExponentialBackoff&
+PageCacheJob::default_cache_insert_backoff_policy() noexcept
+{
+  static const batt::ExponentialBackoff retry_policy_{
+      .max_attempts = 1000,
+      .initial_delay_usec = 100,
+      .backoff_factor = 72,
+      .backoff_divisor = 71,
+      .max_delay_usec = 100 * 1000,
+  };
+
+  return retry_policy_;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 PageCacheJob::PageCacheJob(PageCache* cache) noexcept : cache_{cache}
 {
   job_create_count.fetch_add(1);
@@ -292,18 +308,10 @@ StatusOr<PinnedPage> PageCacheJob::get_page_with_layout_in_job(
     }
   }
 
-  static const batt::ExponentialBackoff retry_policy{
-      .max_attempts = 1000,
-      .initial_delay_usec = 100,
-      .backoff_factor = 72,
-      .backoff_divisor = 71,
-      .max_delay_usec = 100 * 1000,
-  };
-
   // Fall back on the cache or base job if it is available.
   //
   StatusOr<PinnedPage> pinned_page = batt::with_retry_policy(
-      retry_policy, /*op_name=*/"PageCacheJob::get_page",
+      *this->cache_insert_backoff_policy_, /*op_name=*/"PageCacheJob::get_page",
       /*op=*/
       [&] {
         return this->const_get(page_id, required_layout, ok_if_not_found);

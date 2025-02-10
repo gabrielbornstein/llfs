@@ -47,7 +47,7 @@ struct PackedArray {
 
     std::memset(this, 0, sizeof(PackedArray));
 
-    BATT_SUPPRESS_IF_GCC()
+    BATT_UNSUPPRESS_IF_GCC()
 
     this->item_count = count_arg;
 

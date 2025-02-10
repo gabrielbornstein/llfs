@@ -250,6 +250,7 @@ struct BloomFilterQuery {
   T key;
   batt::SmallVec<u64, 24> hash;
   batt::SmallVec<u64, 8> mask;
+  u32 mask_n_hashes = 0;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -273,90 +274,143 @@ struct BloomFilterQuery {
   void update_mask(usize n_hashes, usize block_size) noexcept
   {
     switch (block_size) {
-      case 1: {
-        if (BATT_HINT_FALSE(this->mask.size() != 1)) {
-          this->update_cache((n_hashes + 9) / 10 + 1);
-          this->mask.resize(1, 0);
-
-          for (usize hash_i = 0, src_val_j = 1, shift = 0; hash_i < n_hashes; ++hash_i) {
-            BATT_CHECK_LT(src_val_j, this->hash.size());
-
-            const usize bit_i = ((this->hash[src_val_j] >> shift) & 0b111111ull);
-
-            BATT_CHECK_LT(bit_i, 64);
-
-            this->mask[0] |= u64{1} << bit_i;
-            shift += 6;
-            if (shift == 66) {
-              shift = 0;
-              ++src_val_j;
-            }
-          }
-        }
+      case 1:
+        this->update_mask_impl<1>(n_hashes);
         break;
-      }
-      case 8: {
-        if (BATT_HINT_FALSE(this->mask.size() != 8)) {
-          this->update_cache((n_hashes + 5) / 6 + 1);
-          this->mask.resize(8, 0);
 
-          for (usize hash_i = 0, src_val_j = 1, shift = 0; hash_i < n_hashes; ++hash_i) {
-            BATT_CHECK_LT(src_val_j, this->hash.size());
-
-            const usize mask_word_i = (this->hash[src_val_j] >> shift) & 0b111ull;
-            const usize bit_i = (this->hash[src_val_j] >> (shift + 3)) & 0b111111ull;
-
-            BATT_CHECK_LT(mask_word_i, 8);
-            BATT_CHECK_LT(bit_i, 64);
-
-            this->mask[mask_word_i] |= u64{1} << bit_i;
-            shift += 9;
-            if (shift == 72) {
-              shift = 0;
-              ++src_val_j;
-            }
-          }
-        }
+      case 8:
+        this->update_mask_impl<8>(n_hashes);
         break;
-      }
+
       default:
         BATT_PANIC() << "Invalid block size (words)=" << block_size;
         BATT_UNREACHABLE();
     }
   }
-};
 
-#if 0
+ private:
+  template <usize kBlockWord64Size>
+  void update_mask_impl(usize n_hashes) noexcept
+  {
+    // The number of bits in a 64-bit word.
+    //
+    constexpr usize kWord64BitSize = 64;
 
-/** \brief Invokes `fn` `count` times, each time with a unique hash function applied to `item`.
- *
- * `fn` may return either `void` or `seq::LoopControl`.  If it returns `seq::LoopControl`, then the
- * returned value is used to decide wither to continue calculating hash functions and calling `fn`,
- * or break out of the loop and return early.
- *
- * \return seq::LoopControl::kBreak if `fn` requested that this function return early; otherwise
- * seq::LoopControl::kContinue, indicating that `fn` was called `count` times.
- */
-template <typename T, typename Fn = seq::LoopControl(u64)>
-inline seq::LoopControl hash_for_bloom(const T& item, u64 count, Fn&& fn)
-{
-  for (u64 i = 0; i < count; ++i) {
-    if (seq::run_loop_fn(fn, detail::get_nth_hash_for_bloom(item, i)) == seq::LoopControl::kBreak) {
-      return seq::LoopControl::kBreak;
+    // The number of bits needed to index any position within a 64-bit word.
+    //
+    constexpr usize kWord64IndexBits = batt::log2_ceil(kWord64BitSize);
+
+    // The number of bits in a block.
+    //
+    constexpr usize kBlockBitSize = kBlockWord64Size * kWord64BitSize;
+
+    // The number of bits needed to index any (bit) position within a block.
+    //
+    constexpr usize kBlockIndexBits = batt::log2_ceil(kBlockBitSize);
+
+    // The number of bits needed to index any 64-bit word within a block.
+    //
+    constexpr usize kWord64InBlockIndexBits = kBlockIndexBits - kWord64IndexBits;
+
+    // The number of block index values we can extract from a single 64-bit hash value.
+    //
+    constexpr usize kBlockIndicesPerWord64 = kWord64BitSize / kBlockIndexBits;
+
+    // A bit-mask to extract an index to a 64-bit word within a block.
+    //
+    constexpr u64 kWord64InBlockIndexMask = (u64{1} << kWord64InBlockIndexBits) - 1;
+
+    // A bit-mask to extract an index to a bit within a 64-bit word.
+    //
+    constexpr u64 kBitInWord64IndexMask = (u64{1} << kWord64IndexBits) - 1;
+
+    // The `shift` value that signals running out of bits within a 64-bit hash value.
+    //
+    constexpr usize kShiftOverflow = kBlockIndexBits * (kBlockIndicesPerWord64 + 1);
+
+    //----- --- -- -  -  -   -
+    static_assert(kWord64InBlockIndexBits + kWord64IndexBits == kBlockIndexBits);
+    //----- --- -- -  -  -   -
+
+    const bool mask_size_changed = (this->mask.size() != kBlockWord64Size);
+
+    // We must recalculate the mask if either the block size or number of hash functions changes.
+    //
+    if (BATT_HINT_FALSE(mask_size_changed || (this->mask_n_hashes != n_hashes))) {
+      // Resize the hash value cache (this->hash) so we have enough bits for 1 64-bit index to
+      // determine which block the key belongs to, plus enough index bits for `n_hashes` locations
+      // within the block.
+      //
+      this->update_cache(((n_hashes + kBlockIndicesPerWord64 - 1) / kBlockIndicesPerWord64) + 1);
+
+      // The mask should exactly as large as the block; all 0's initially.
+      //
+      this->mask.resize(kBlockWord64Size);
+      this->mask.assign(kBlockWord64Size, 0);
+
+      // Each time through the loop, we pull enough bits from this->hash[1..] to locate a single bit
+      // within the mask.
+      //
+      // `src_val_j` is the current index into this->hash from which we are pulling bits, and
+      // `shift` is our current position within this->hash[src_val_j].  `shift` is updated each time
+      // though the loop; `src_val_j` is updated when `shift` reaches the "overflow" value.
+      //
+      for (usize hash_i = 0, src_val_j = 1, shift = 0; hash_i < n_hashes; ++hash_i) {
+        BATT_ASSERT_LT(src_val_j, this->hash.size());
+
+        // Extract bits to tell us which 64-bit word within our mask to set.
+        //
+        const usize word_k = (this->hash[src_val_j] >> shift) & kWord64InBlockIndexMask;
+
+        BATT_ASSERT_LT(word_k, kBlockWord64Size);
+
+        // Extract more bits to select a bit within `word_k`.
+        //
+        const usize bit_l =
+            (this->hash[src_val_j] >> (shift + kWord64InBlockIndexBits)) & kBitInWord64IndexMask;
+
+        BATT_ASSERT_LT(bit_l, kWord64BitSize);
+
+        // Set the selected bit within the selected word inside the mask.
+        //
+        this->mask[word_k] |= (u64{1} << bit_l);
+
+        // Move past the extracted bits and move to the next src if necessary.
+        //
+        shift += kBlockIndexBits;
+        if (shift == kShiftOverflow) {
+          shift = 0;
+          ++src_val_j;
+        }
+      }
+
+      // Finally store the new number of hashes.
+      //
+      this->mask_n_hashes = n_hashes;
     }
   }
-  return seq::LoopControl::kContinue;
-}
+};
 
-// Calculate the required bit rate for a given target false positive probability.
-//
-inline double optimal_bloom_filter_bit_rate(double target_false_positive_P)
+template <typename T>
+inline bool operator==(const BloomFilterQuery<T>& l, const BloomFilterQuery<T>& r) noexcept
 {
-  static const double log_phi_e = 2.0780869212350273;
-  return -std::log(target_false_positive_P) * log_phi_e;
+  return l.key == r.key && l.hash == r.hash && l.mask == r.mask &&
+         l.mask_n_hashes == r.mask_n_hashes;
 }
 
-#endif
+template <typename T>
+inline bool operator!=(const BloomFilterQuery<T>& l, const BloomFilterQuery<T>& r) noexcept
+{
+  return !(l == r);
+}
+
+template <typename T>
+inline std::ostream& operator<<(std::ostream& out, const BloomFilterQuery<T>& t)
+{
+  return out << "BloomFilterQuery{.key=" << batt::make_printable(t.key)
+             << ", .hash=" << batt::dump_range(t.hash) << ", .mask=" << batt::dump_range(t.mask)
+             << ",}";
+}
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 
@@ -773,9 +827,14 @@ struct PackedBloomFilter {
       usize offset = 0;
       for (const little_u64& w : this->get_words()) {
         out << std::endl
-            << batt::to_string(std::hex, std::setw(8), offset) << ": "
+            << batt::to_string("x", std::hex, std::setw(8), std::setfill('0'), offset) << ": "
             << std::bitset<64>{w.value()};
         offset += sizeof(little_u64);
+        if ((offset & 63) == 0) {
+          out << std::endl << std::string(75, '~');
+        } else if ((offset & 31) == 0) {
+          out << std::endl;
+        }
       }
     };
   }

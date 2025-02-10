@@ -53,6 +53,11 @@ std::string make_random_word(Rng& rng)
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+// TODO [tastolfi 2025-02-04] Add test for re-using same Query object, with multiple filters, each
+// of which has different layout, size, and/or hash_count.
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 
 TEST(BloomFilterTest, RandomItems)
 {

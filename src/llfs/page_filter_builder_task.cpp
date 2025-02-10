@@ -113,13 +113,13 @@ void PageFilterBuilderTask::process_queue() noexcept
   for (;;) {
     // Grab the next new leaf page from the queue.
     //
-    StatusOr<llfs::PinnedPage> pinned_leaf = this->queue_.await_next();
-    if (!pinned_leaf.ok()) {
+    StatusOr<llfs::PinnedPage> pinned_src_page = this->queue_.await_next();
+    if (!pinned_src_page.ok()) {
       break;
     }
     this->metrics_.pop_count.add(1);
 
-    const llfs::PageId src_page_id = pinned_leaf->page_id();
+    const llfs::PageId src_page_id = pinned_src_page->page_id();
     const llfs::PageId filter_page_id = this->filter_page_id_for(src_page_id);
 
     BATT_CHECK_NE(src_page_id, filter_page_id);
@@ -137,7 +137,7 @@ void PageFilterBuilderTask::process_queue() noexcept
                     << BATT_INSPECT(batt::Task::current_id()) << BATT_INSPECT(src_page_id)
                     << BATT_INSPECT(filter_page_id));
 
-    Status build_status = this->filter_builder_->build_filter(*pinned_leaf, *filter_buffer);
+    Status build_status = this->filter_builder_->build_filter(*pinned_src_page, *filter_buffer);
     if (!build_status.ok()) {
       LOG(ERROR) << "Failed to build filter page!" << BATT_INSPECT(filter_page_id)
                  << BATT_INSPECT(build_status);
