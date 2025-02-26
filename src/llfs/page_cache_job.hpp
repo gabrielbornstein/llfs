@@ -132,6 +132,8 @@ class PageCacheJob : public PageLoader
 
   ~PageCacheJob();
 
+  std::atomic<i32> get_latency_sample_rate_spec{64};
+  std::atomic<bool> count_get_calls{false};
   DebugMask debug_mask;
 
   PageCache& cache() const noexcept

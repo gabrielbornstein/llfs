@@ -271,6 +271,13 @@ StatusOr<PinnedPage> PageCacheJob::get_page_with_layout_in_job(
     PageId page_id, const Optional<PageLayoutId>& required_layout, PinPageToJob pin_page_to_job,
     OkIfNotFound ok_if_not_found)
 {
+  if (this->count_get_calls) {
+    this->cache().metrics().job_get_page_count.add(1);
+  }
+
+  batt::LatencyTimer timer{batt::Every2ToThe{this->get_latency_sample_rate_spec},
+                           this->cache().metrics().job_get_page_latency};
+
   // First check in the pinned pages table.
   {
     Optional<PinnedPage> already_pinned = this->get_already_pinned(page_id, pin_page_to_job);

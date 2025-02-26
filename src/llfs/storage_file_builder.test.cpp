@@ -292,7 +292,7 @@ TEST_F(StorageFileBuilderTest, WriteReadFile)
 
   ASSERT_TRUE(ioring.ok()) << BATT_INSPECT(ioring.status());
 
-  auto storage_context = batt::make_shared<llfs::StorageContext>(
+  auto storage_context = llfs::StorageContext::make_shared(
       batt::Runtime::instance().default_scheduler(), ioring->get_io_ring());
 
   const char* const test_file_name = "/tmp/llfs_test_file";
@@ -413,7 +413,7 @@ TEST_F(StorageFileBuilderTest, WriteReadManyPackedConfigs)
 
   // Create StorageContext for testing recovery of PageDevice using UUID later
   //
-  auto storage_context = batt::make_shared<llfs::StorageContext>(
+  auto storage_context = llfs::StorageContext::make_shared(
       batt::Runtime::instance().default_scheduler(), ioring->get_io_ring());
 
   // Add PageDeviceConfigOptions to StorageFileBuilder to create 3 PackedConfigBlocks, where the

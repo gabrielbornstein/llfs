@@ -16,6 +16,7 @@
 #include <llfs/define_packed_type.hpp>
 #include <llfs/int_types.hpp>
 #include <llfs/packed_pointer.hpp>
+#include <llfs/stable_string_store.hpp>
 
 #include <batteries/small_vec.hpp>
 #include <batteries/static_dispatch.hpp>
@@ -39,6 +40,25 @@ struct BPTrieNode {
   BPTrieNode* right_ = nullptr;
 };
 
+class BPTrieNodeSet
+{
+ public:
+  usize size() const noexcept
+  {
+    return this->node_count_;
+  }
+
+  BPTrieNode* new_node() noexcept
+  {
+    return new (this->memory_.allocate(sizeof(BPTrieNode)).data()) BPTrieNode{};
+  }
+
+ private:
+  BasicStableStringStore<4096, 4096> memory_;
+
+  usize node_count_ = 0;
+};
+
 /** \brief Builds a BPTrie subtree from the given range of keys (std::string_view objects).
  *
  * All new node objects are allocated at the end of the passed `nodes` vector.  This function calls
@@ -48,8 +68,8 @@ struct BPTrieNode {
  * constructor).
  */
 template <typename Range>
-BPTrieNode* make_trie(const Range& keys, std::vector<std::unique_ptr<BPTrieNode>>& nodes,
-                      usize current_prefix_len = 0, bool is_right_subtree = false);
+BPTrieNode* make_trie(const Range& keys, BPTrieNodeSet& nodes, usize current_prefix_len = 0,
+                      bool is_right_subtree = false);
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 /** \brief A binary prefix trie - implements an ordered set of strings.
@@ -177,7 +197,7 @@ class BPTrie
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
-  std::vector<std::unique_ptr<BPTrieNode>> nodes_;
+  BPTrieNodeSet nodes_;
   BPTrieNode* root_;
   usize size_ = 0;
   PackedLayout layout_ = PackedLayout::kVanEmdeBoas;
@@ -290,7 +310,13 @@ struct PackedBPTrie {
     return reinterpret_cast<const PackedBPTrieNodeBase*>(this + 1);
   }
 
-  batt::Interval<usize> find(std::string_view key) const noexcept;
+  batt::Interval<usize> find(std::string_view key, usize& key_prefix_match) const noexcept;
+
+  batt::Interval<usize> find(std::string_view key) const noexcept
+  {
+    usize ignored;
+    return this->find(key, ignored);
+  }
 
   std::string_view get_key(usize index, batt::SmallVecBase<char>& buffer) const noexcept;
 };

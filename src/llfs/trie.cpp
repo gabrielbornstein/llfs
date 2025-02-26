@@ -396,13 +396,16 @@ struct NextSmaller<u8> : batt::StaticType<u8> {
 //
 template <typename PivotPosT, typename SubtreeOffset>
 batt::Interval<usize> find_impl(const PackedBPTrieNodeBase* node, std::string_view& key,
-                                batt::Interval<usize>& range)
+                                batt::Interval<usize>& range, usize& key_prefix_match)
 {
   constexpr i64 threshold = i64{1} << (sizeof(typename NextSmaller<PivotPosT>::type) * 8);
 
+  key_prefix_match = 0;
+
   for (;;) {
     if (!std::is_same_v<PivotPosT, u8> && range.size() < threshold) {
-      return find_impl<typename NextSmaller<PivotPosT>::type, SubtreeOffset>(node, key, range);
+      return find_impl<typename NextSmaller<PivotPosT>::type, SubtreeOffset>(node, key, range,
+                                                                             key_prefix_match);
     }
 
     usize prefix_chunk_len;
@@ -424,6 +427,7 @@ batt::Interval<usize> find_impl(const PackedBPTrieNodeBase* node, std::string_vi
         }
 
         key = key.substr(prefix_chunk_len);
+        key_prefix_match += prefix_chunk_len;
 
         if (prefix_chunk_len == PackedBPTrie::kMaxPrefixChunkLen) {
           node = reinterpret_cast<const PackedBPTrieNodeBase*>(&node->prefix_[prefix_chunk_len]);
@@ -458,6 +462,7 @@ batt::Interval<usize> find_impl(const PackedBPTrieNodeBase* node, std::string_vi
           return range;
         }
         key = key.substr(1);
+        key_prefix_match += 1;
       }
 
       range.lower_bound = middle;
@@ -470,7 +475,8 @@ batt::Interval<usize> find_impl(const PackedBPTrieNodeBase* node, std::string_vi
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-batt::Interval<usize> PackedBPTrie::find(std::string_view key) const noexcept
+batt::Interval<usize> PackedBPTrie::find(std::string_view key,
+                                         usize& key_prefix_match) const noexcept
 {
   batt::Interval<usize> range{0, this->size()};
 
@@ -482,16 +488,16 @@ batt::Interval<usize> PackedBPTrie::find(std::string_view key) const noexcept
 
   switch (this->offset_kind_) {
     case PackedBPTrie::kOffset8:
-      return find_impl<u8, u8>(node, key, range);
+      return find_impl<u8, u8>(node, key, range, key_prefix_match);
 
     case PackedBPTrie::kOffset16:
-      return find_impl<little_u16, little_u16>(node, key, range);
+      return find_impl<little_u16, little_u16>(node, key, range, key_prefix_match);
 
     case PackedBPTrie::kOffset24:
-      return find_impl<little_u24, little_u24>(node, key, range);
+      return find_impl<little_u24, little_u24>(node, key, range, key_prefix_match);
 
     case PackedBPTrie::kOffset32:
-      return find_impl<little_u32, little_u32>(node, key, range);
+      return find_impl<little_u32, little_u32>(node, key, range, key_prefix_match);
   }
 
   BATT_PANIC() << "Bad offset kind: " << (int)this->offset_kind_;

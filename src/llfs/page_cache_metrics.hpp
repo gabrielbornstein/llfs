@@ -33,6 +33,8 @@ struct PageCacheMetrics {
   LatencyMetric pipeline_wait_latency;
   LatencyMetric update_ref_counts_latency;
   LatencyMetric ref_count_sync_latency;
+  LatencyMetric job_get_page_latency;
+  CountMetric<u64> job_get_page_count;
 };
 
 }  // namespace llfs
