@@ -1622,6 +1622,90 @@ TEST_F(VolumeSimTest, ConcurrentAppendJobs)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+TEST_F(VolumeSimTest, ConcurrentPageDeviceAcquisition)
+{
+  for (usize seed = 0; seed < 256; ++seed) {
+    std::mt19937 rng{seed};
+
+    llfs::StorageSimulation sim{batt::StateMachineEntropySource{
+        /*entropy_fn=*/[&rng](usize min_value, usize max_value) -> usize {
+          std::uniform_int_distribution<usize> pick_value{min_value, max_value};
+          return pick_value(rng);
+        }}};
+
+    // Add three page devices so we can verify that the ref counts are correctly recovered from
+    // a subset.
+    //
+    sim.add_page_arena(this->pages_per_device, llfs::PageSize{1 * kKiB});
+
+    sim.register_page_reader(llfs::PageGraphNodeView::page_layout_id(), __FILE__, __LINE__,
+                             llfs::PageGraphNodeView::page_reader());
+
+    const auto main_task_fn = [&] {
+      LLFS_VLOG(1) << "entered main;" << BATT_INSPECT(seed);
+
+      // Create the simulated Volume.
+      //
+      {
+        batt::StatusOr<std::unique_ptr<llfs::Volume>> recovered_volume = sim.get_volume(
+            "TestVolume", /*slot_visitor_fn=*/
+            [](auto&&...) {
+              return batt::OkStatus();
+            },
+            /*root_log_capacity=*/64 * kKiB);
+
+        ASSERT_TRUE(recovered_volume.ok()) << recovered_volume.status();
+
+        llfs::Volume& volume = **recovered_volume;
+
+        LLFS_VLOG(1) << "recovered volume";
+
+        LLFS_VLOG(1) << "checking ref counts...";
+
+        // TODO: [gbornste 3/10/25] Consider replacing std::thread with batt::Task
+        // 
+        LLFS_VLOG(1) << "1";
+        // TODO: [gbornste 3/11/25] Consider waiting for all threads to be instantiated before allowing them to execute here.
+        // 
+        // TODO: [gbornste 3/11/25] Need a function to write to PageCache. Should be called on another thread.
+        // 
+        auto get_devices = [&]() {
+          LLFS_VLOG(1) << "2";
+          for (llfs::PageCache::PageDeviceEntry* entry :
+            sim.cache()->devices_with_page_size(1 * kKiB)) {
+              LLFS_VLOG(1) << "3";
+            BATT_CHECK_NOT_NULLPTR(entry);
+            break;
+          }
+        };
+        
+        const int NUM_THREADS = 10;
+        std::vector<std::thread> threads;
+        LLFS_VLOG(1) << "Accessing the PageCache on multiple threads...";
+        for (int i = 0; i < NUM_THREADS; ++i) {
+          threads.push_back(std::thread(get_devices));
+        } 
+
+        LLFS_VLOG(1) << "Joining all threads";
+        for (int i = 0; i < NUM_THREADS; ++i) {
+          threads[i].join();
+        }
+        LLFS_VLOG(1) << "Finished accessing age cache.";
+
+        LLFS_VLOG(1) << "volume.halt()";
+        volume.halt();
+        LLFS_VLOG(1) << "volume.join()";
+        volume.join();
+        LLFS_VLOG(1) << "done!";
+      }
+    };
+
+    sim.run_main_task(main_task_fn);
+  }
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 auto VolumeSimTest::RecoverySimState::get_slot_visitor()
 {
   return [this](const llfs::SlotParse /*slot*/, const llfs::PageId& page_id) {
