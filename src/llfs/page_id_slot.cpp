@@ -70,17 +70,6 @@ namespace llfs {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-batt::StatusOr<PinnedPage> PageIdSlot::load_through(PageLoader& loader,
-                                                    const Optional<PageLayoutId>& required_layout,
-                                                    PinPageToJob pin_page_to_job,
-                                                    OkIfNotFound ok_if_not_found) const noexcept
-{
-  return Self::load_through_impl(this->cache_slot_ref, loader, required_layout, pin_page_to_job,
-                                 ok_if_not_found, this->page_id);
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
 batt::StatusOr<PinnedPage> PageIdSlot::try_pin() const noexcept
 {
   return Self::try_pin_impl(this->cache_slot_ref, this->page_id);
