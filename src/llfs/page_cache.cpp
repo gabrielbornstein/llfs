@@ -385,6 +385,8 @@ StatusOr<std::shared_ptr<PageBuffer>> PageCache::allocate_page_of_size_log2(
 {
   BATT_CHECK_LT(size_log2, kMaxPageSizeLog2);
 
+  llfs::PageSize page_size{u32{1} << size_log2};
+
   LatencyTimer alloc_timer{this->metrics_.allocate_page_alloc_latency};
 
   Slice<PageDeviceEntry* const> device_entries = this->devices_with_page_size_log2(size_log2);
@@ -430,7 +432,9 @@ StatusOr<std::shared_ptr<PageBuffer>> PageCache::allocate_page_of_size_log2(
     }
   }
 
-  LLFS_LOG_WARNING() << "No arena with free space could be found";
+  LLFS_LOG_WARNING() << "No arena with free space could be found;" << BATT_INSPECT(page_size)
+                     << BATT_INSPECT(wait_for_resource);
+
   return Status{batt::StatusCode::kUnavailable};  // TODO [tastolfi 2021-10-20]
 }
 
