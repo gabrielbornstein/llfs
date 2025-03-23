@@ -79,6 +79,11 @@ class PageView
     return this->data_;
   }
 
+  const PageBuffer& page_buffer() const noexcept
+  {
+    return *this->data_;
+  }
+
   ConstBuffer const_buffer() const noexcept
   {
     return this->data_->const_buffer();

@@ -783,13 +783,12 @@ void PageCache::async_load_page_into_slot(const PageCacheSlot::PinnedRef& pinned
         std::shared_ptr<const PageBuffer>& page_data = *result;
         p_metrics->total_bytes_read.add(page_data->size());
 
-        PageLayoutId layout_id = get_page_header(*page_data).layout_id;
-        if (required_layout) {
-          if (*required_layout != layout_id) {
-            latch->set_value(::llfs::make_status(StatusCode::kPageHeaderBadLayoutId));
-            return;
-          }
+        Status layout_status = require_page_layout(*page_data, required_layout);
+        if (!layout_status.ok()) {
+          latch->set_value(layout_status);
+          return;
         }
+        PageLayoutId layout_id = get_page_header(*page_data).layout_id;
 
         PageReader reader_for_layout;
         {

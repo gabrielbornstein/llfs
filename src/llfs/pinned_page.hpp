@@ -92,6 +92,11 @@ class PinnedPage
     return this->page_view_->data();
   }
 
+  const PageBuffer& page_buffer() const noexcept
+  {
+    return this->page_view_->page_buffer();
+  }
+
   std::shared_ptr<const PageView> get_shared_view() const
   {
     return BATT_OK_RESULT_OR_PANIC(this->pinned_cache_slot_.get()->get_ready_value_or_panic());
