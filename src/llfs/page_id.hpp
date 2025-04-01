@@ -13,6 +13,8 @@
 #include <llfs/int_types.hpp>
 #include <llfs/optional.hpp>
 
+#include <batteries/utility.hpp>
+
 #include <iomanip>
 #include <memory>
 #include <ostream>
@@ -40,11 +42,11 @@ class PageId
 
   PageId() = default;
 
-  explicit PageId(page_id_int val) noexcept : value_{val}
+  BATT_ALWAYS_INLINE explicit PageId(page_id_int val) noexcept : value_{val}
   {
   }
 
-  page_id_int int_value() const
+  BATT_ALWAYS_INLINE page_id_int int_value() const
   {
     return this->value_;
   }

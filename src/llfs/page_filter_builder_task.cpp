@@ -55,15 +55,6 @@ void PageFilterBuilderTask::join() noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-PageId PageFilterBuilderTask::filter_page_id_for(PageId src_page_id) const noexcept
-{
-  return this->filter_page_ids_.make_page_id(  //
-      this->src_page_ids_.get_physical_page(src_page_id),
-      this->src_page_ids_.get_generation(src_page_id));
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
 Status PageFilterBuilderTask::push(llfs::PinnedPage&& src_page) noexcept
 {
   if (this->filter_builder_->accepts_page(src_page)) {
@@ -148,12 +139,14 @@ void PageFilterBuilderTask::process_queue() noexcept
     this->metrics_.build_ok_count.add(1);
     this->metrics_.build_rate_15s.update(this->metrics_.build_ok_count.load());
 
-    LOG_EVERY_N(INFO, 10000) << BATT_INSPECT(this->metrics_.push_count)
-                             << BATT_INSPECT(this->metrics_.pop_count)
-                             << BATT_INSPECT(this->metrics_.build_ok_count)
-                             << BATT_INSPECT(this->metrics_.build_error_count)
-                             << BATT_INSPECT(this->metrics_.push_rate_15s.get())
-                             << BATT_INSPECT(this->metrics_.build_rate_15s.get());
+    if (false) {
+      LOG_EVERY_N(INFO, 10000) << BATT_INSPECT(this->metrics_.push_count)
+                               << BATT_INSPECT(this->metrics_.pop_count)
+                               << BATT_INSPECT(this->metrics_.build_ok_count)
+                               << BATT_INSPECT(this->metrics_.build_error_count)
+                               << BATT_INSPECT(this->metrics_.push_rate_15s.get())
+                               << BATT_INSPECT(this->metrics_.build_rate_15s.get());
+    }
 
     // Start writing the page asynchronously.
     //

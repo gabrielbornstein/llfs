@@ -41,6 +41,7 @@
 #include <batteries/async/cancel_token.hpp>
 #include <batteries/async/latch.hpp>
 #include <batteries/async/mutex.hpp>
+#include <batteries/utility.hpp>
 
 #include <functional>
 #include <iomanip>
@@ -142,7 +143,7 @@ class PageCache : public PageLoader
                             PageSize filter_page_size,
                             std::unique_ptr<PageFilterBuilder>&& filter_builder) noexcept;
 
-  Optional<PageId> filter_page_id_for(PageId page_id) noexcept;
+  Optional<PageId> filter_page_id_for(PageId page_id) const;
 
   /** \brief DEPRECATED - use register_page_reader.
    */
@@ -354,6 +355,25 @@ class PageCache : public PageLoader
   std::atomic<isize> history_end_{0};
 
 };  // class PageCache
+
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+BATT_ALWAYS_INLINE inline Optional<PageId> PageCache::filter_page_id_for(PageId src_page_id) const
+{
+  const auto device_id = PageIdFactory::get_device_id(src_page_id);
+  if (device_id >= this->page_devices_.size()) {
+    return None;
+  }
+
+  PageDeviceEntry& src_entry = *this->page_devices_[device_id];
+  if (!src_entry.filter_builder_task) {
+    return None;
+  }
+
+  return src_entry.filter_builder_task->filter_page_id_for(src_page_id);
+}
 
 }  // namespace llfs
 

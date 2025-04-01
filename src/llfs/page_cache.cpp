@@ -274,23 +274,6 @@ Status PageCache::set_filter_builder(batt::TaskScheduler& task_scheduler, PageSi
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Optional<PageId> PageCache::filter_page_id_for(PageId src_page_id) noexcept
-{
-  const auto device_id = PageIdFactory::get_device_id(src_page_id);
-  if (device_id >= this->page_devices_.size()) {
-    return None;
-  }
-
-  PageDeviceEntry& src_entry = *this->page_devices_[device_id];
-  if (!src_entry.filter_builder_task) {
-    return None;
-  }
-
-  return src_entry.filter_builder_task->filter_page_id_for(src_page_id);
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
 bool PageCache::register_page_layout(const PageLayoutId& layout_id, const PageReader& reader)
 {
   LLFS_LOG_WARNING() << "PageCache::register_page_layout is DEPRECATED; please use "
@@ -592,7 +575,9 @@ StatusOr<PinnedPage> PageCache::put_view(std::shared_ptr<const PageView>&& view,
   BATT_CHECK_NOT_NULLPTR(view);
 
   if (view->get_page_layout_id() != view->header().layout_id) {
-    return {::llfs::make_status(StatusCode::kPageHeaderBadLayoutId)};
+    Status status = ::llfs::make_status(StatusCode::kPageHeaderBadLayoutId);
+    LLFS_LOG_ERROR() << status << std::endl << boost::stacktrace::stacktrace{};
+    return status;
   }
 
   if (this->page_readers_->lock()->count(view->get_page_layout_id()) == 0) {
@@ -683,8 +668,13 @@ StatusOr<PinnedPage> PageCache::get_page_with_layout_in_job(
   BATT_ASSIGN_OK_RESULT(PageCacheSlot::PinnedRef pinned_slot,  //
                         this->find_page_in_cache(page_id, require_layout, ok_if_not_found));
 
-  BATT_ASSIGN_OK_RESULT(StatusOr<std::shared_ptr<const PageView>> loaded,  //
-                        pinned_slot->await());
+  StatusOr<std::shared_ptr<const PageView>> loaded = pinned_slot->await();
+  if (!loaded.ok()) {
+    if (!ok_if_not_found) {
+      LLFS_LOG_ERROR() << loaded.status() << std::endl << boost::stacktrace::stacktrace{};
+    }
+    return loaded.status();
+  }
 
   BATT_CHECK_EQ(loaded->get() != nullptr, bool{pinned_slot});
 

@@ -9,6 +9,7 @@
 #include <llfs/packed_page_header.hpp>
 //
 
+#include <llfs/logging.hpp>
 #include <llfs/status_code.hpp>
 
 namespace llfs {
@@ -62,7 +63,10 @@ Status require_page_layout(const PageBuffer& page,
   if (required_layout) {
     const PageLayoutId layout_id = get_page_header(page).layout_id;
     if (layout_id != *required_layout) {
-      return ::llfs::make_status(StatusCode::kPageHeaderBadLayoutId);
+      const Status status = ::llfs::make_status(StatusCode::kPageHeaderBadLayoutId);
+      LLFS_LOG_ERROR() << status << std::endl
+                       << BATT_INSPECT(layout_id) << BATT_INSPECT(required_layout) << std::endl;
+      return status;
     }
   }
   return OkStatus();

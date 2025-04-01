@@ -395,9 +395,11 @@ inline StatusOr<slot_offset_type> PageAllocator::update_page_ref_counts(
   sample_count.fetch_add(1);
   prc_count.fetch_add(txn->ref_counts.size());
 
-  LLFS_LOG_INFO_EVERY_T(100.0 /*seconds*/)
-      << "Average pages per allocator update: "
-      << ((double)prc_count.load() / (double)sample_count.load());
+  if (false) {
+    LLFS_LOG_INFO_EVERY_T(100.0 /*seconds*/)
+        << "Average pages per allocator update: "
+        << ((double)prc_count.load() / (double)sample_count.load());
+  }
 
   StatusOr<slot_offset_type> update_status = this->update(*txn);
   BATT_REQUIRE_OK(update_status);

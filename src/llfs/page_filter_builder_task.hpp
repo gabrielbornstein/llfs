@@ -80,7 +80,7 @@ class PageFilterBuilderTask
 
   void join() noexcept;
 
-  PageId filter_page_id_for(PageId src_page_id) const noexcept;
+  PageId filter_page_id_for(PageId src_page_id) const;
 
   Status push(llfs::PinnedPage&& src_page) noexcept;
 
@@ -116,6 +116,17 @@ class PageFilterBuilderTask
 
   batt::Task task_;
 };
+
+//=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+BATT_ALWAYS_INLINE inline PageId PageFilterBuilderTask::filter_page_id_for(PageId src_page_id) const
+{
+  return this->filter_page_ids_.make_page_id(  //
+      this->src_page_ids_.get_physical_page(src_page_id),
+      this->src_page_ids_.get_generation(src_page_id));
+}
 
 }  //namespace llfs
 

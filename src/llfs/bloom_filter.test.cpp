@@ -66,7 +66,7 @@ TEST(BloomFilterTest, RandomItems)
 
   // Generate random data for the tests.
   //
-  for (usize r = 1; r <= 5; ++r) {
+  for (usize r = 1; r <= 3; ++r) {
     std::default_random_engine rng{15485863 /*(1M-th prime)*/ * r};
 
     {

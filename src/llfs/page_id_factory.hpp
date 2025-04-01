@@ -18,6 +18,7 @@
 #include <batteries/assert.hpp>
 #include <batteries/checked_cast.hpp>
 #include <batteries/math.hpp>
+#include <batteries/utility.hpp>
 
 #include <boost/operators.hpp>
 
@@ -59,6 +60,13 @@ class PageIdFactory : public boost::equality_comparable<PageIdFactory>
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  BATT_ALWAYS_INLINE static page_device_id_int get_device_id(PageId id)
+  {
+    return (id.int_value() & kPageDeviceIdMask) >> kPageDeviceIdShift;
+  }
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
   explicit PageIdFactory(PageCount device_capacity, page_device_id_int page_device_id) noexcept
       : capacity_{BATT_CHECKED_CAST(page_id_int, device_capacity.value())}
       , device_id_{page_device_id}
@@ -77,7 +85,8 @@ class PageIdFactory : public boost::equality_comparable<PageIdFactory>
     return PageCount{this->capacity_};
   }
 
-  PageId make_page_id(page_id_int physical_page, page_generation_int generation) const
+  BATT_ALWAYS_INLINE PageId make_page_id(page_id_int physical_page,
+                                         page_generation_int generation) const
   {
     BATT_CHECK_LT(physical_page, this->capacity_);
     return PageId{this->device_id_prefix_                                                 //
@@ -95,19 +104,14 @@ class PageIdFactory : public boost::equality_comparable<PageIdFactory>
     return this->generation_mask_ >> this->capacity_bits_;
   }
 
-  i64 get_physical_page(PageId id) const
+  BATT_ALWAYS_INLINE i64 get_physical_page(PageId id) const
   {
     return id.int_value() & this->physical_page_mask_;
   }
 
-  page_generation_int get_generation(PageId id) const
+  BATT_ALWAYS_INLINE page_generation_int get_generation(PageId id) const
   {
     return (id.int_value() & this->generation_mask_) >> this->capacity_bits_;
-  }
-
-  static page_device_id_int get_device_id(PageId id)
-  {
-    return (id.int_value() & kPageDeviceIdMask) >> kPageDeviceIdShift;
   }
 
   page_device_id_int get_device_id() const
