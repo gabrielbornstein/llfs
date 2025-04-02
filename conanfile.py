@@ -58,6 +58,10 @@ class LlfsConan(ConanFile):
         "src/**/*.cpp",
     ]
 
+    tool_requires = [
+        "cmake/[>=3.20.0]",
+    ]
+
     #+++++++++++-+-+--+----- --- -- -  -  -   -
 
     def configure(self):

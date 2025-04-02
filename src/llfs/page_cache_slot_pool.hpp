@@ -51,6 +51,16 @@ class PageCacheSlot::Pool : public boost::intrusive_ref_counter<Pool>
     CountMetric<i64> miss_count{0};
     CountMetric<i64> erase_count{0};
     CountMetric<i64> full_count{0};
+
+    //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+    double hit_rate() const
+    {
+      const double query_count = this->query_count.get();
+      const double non_miss_count = query_count - this->miss_count.get();
+
+      return (query_count == 0) ? -1 : (non_miss_count / query_count);
+    }
   };
 
   /** \brief Returns the default number of random eviction candidates to consider.

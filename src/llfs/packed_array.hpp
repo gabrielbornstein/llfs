@@ -101,6 +101,8 @@ struct PackedArray {
     return this->item_count;
   }
 
+  BATT_SUPPRESS_IF_GCC("-Warray-bounds")
+
   T& operator[](usize index)
   {
     return this->items[index];
@@ -110,6 +112,8 @@ struct PackedArray {
   {
     return this->items[index];
   }
+
+  BATT_UNSUPPRESS_IF_GCC()
 
   auto debug_dump(const void* base) const
   {
