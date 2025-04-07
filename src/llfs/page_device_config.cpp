@@ -56,7 +56,12 @@ Status configure_storage_object(StorageFileBuilder::Transaction& txn,
                                 page_count = options.page_count](RawBlockFile& file) -> Status {
     LLFS_DVLOG(1) << "truncating to " << BATT_INSPECT(pages_offset.upper_bound)
                   << BATT_INSPECT(page_size) << BATT_INSPECT(page_count);
-    Status truncate_status = file.truncate_at_least(pages_offset.upper_bound);
+    LOG(INFO) << "Calling truncate_at_least with pages_offset.upper_bound: " << pages_offset.upper_bound;
+    // TODO: [Gabe Bornstein 3/19/25] Change truncate back to -> truncate_at_least. 
+    //       Also, change pages_offset.upper_bound to be dependenct on new variable starting file size.
+    // 
+    Status truncate_status = file.truncate(0);
+    // Status truncate_status = file.truncate_at_least(pages_offset.upper_bound);
     BATT_REQUIRE_OK(truncate_status);
 
     if (!kFastIoRingPageDeviceInit) {

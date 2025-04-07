@@ -90,7 +90,7 @@ StatusOr<i32> status_or_i32_from_uring_retval(int retval)
         << batt::LogLevel::kError << "failed io_uring_register_eventfd: " << std::strerror(-retval);
   }
 
-  LLFS_VLOG(1) << "IoRingImpl created";
+  LLFS_VLOG(1) << "IoRingImpl created with fd == " << impl->event_fd_.load();
 
   return {std::move(impl)};
 }

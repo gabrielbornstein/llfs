@@ -95,6 +95,7 @@ StatusOr<i64> IoRingRawBlockFile::get_size() /*override*/
 //
 Status IoRingRawBlockFile::truncate(i64 new_offset_upper_bound) /*override*/
 {
+  LOG(INFO) << "IoRingRawBlockFile::truncate(: " << this->file_.get_fd() << " to size: " << new_offset_upper_bound;
   return truncate_fd(this->file_.get_fd(), BATT_CHECKED_CAST(u64, new_offset_upper_bound));
 }
 

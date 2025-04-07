@@ -596,6 +596,52 @@ TEST_F(VolumeTest, ReadWriteEvents)
 }
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
+TEST_F(VolumeTest, ReadWriteUntilFull)
+{
+  std::vector<llfs::slot_offset_type> upsert_slots;
+  {
+    // Create an empty volume.
+    //
+    auto fake_root_log = llfs::testing::make_fake_log_device_factory(*this->root_log);
+    auto fake_recycler_log = llfs::testing::make_fake_log_device_factory(*this->recycler_log);
+
+    std::unique_ptr<llfs::Volume> test_volume = this->open_volume_or_die(
+        fake_root_log, fake_recycler_log,
+        /*slot_visitor_fn=*/[](const llfs::SlotParse&, const auto& /*payload*/) {
+          return llfs::OkStatus();
+        });
+
+    this->save_uuids(*test_volume);
+
+    // Verify that there are no key/value pairs.
+    {
+      std::unordered_map<i32, i32> data = this->read_volume(*test_volume);
+
+      EXPECT_THAT(data, ::testing::IsEmpty());
+    }
+
+    i32 NUM_SLOTS = 100000;
+    // Append slots.
+    //
+    for (i32 key = 0; key < NUM_SLOTS; key += 1) {
+      UpsertEvent upsert{key, key * 3 + 1};
+      auto upsert_event = llfs::pack_as_variant<TestVolumeEvent>(upsert);
+
+      llfs::StatusOr<batt::Grant> grant = test_volume->reserve(
+          test_volume->calculate_grant_size(upsert_event), batt::WaitForResource::kFalse);
+
+      // ASSERT_TRUE(grant.ok());
+
+      llfs::StatusOr<llfs::SlotRange> appended = test_volume->append(upsert_event, *grant);
+
+      ASSERT_TRUE(appended.ok()) << appended.status();
+
+      upsert_slots.emplace_back(appended->upper_bound);
+    }
+  }
+}
+
+//=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 // Test Plan:
 //  1. Reader::clone_lock() - keep trim from happening when there is no other barrier
 //  2. Create multiple Readers, trim the Volume, verify that only the last Reader's trim

@@ -152,6 +152,7 @@ StatusOr<std::unique_ptr<LogDevice>> MemoryLogDeviceFactory::open_log_device(
 
   // Truncate the log at the indicated point.
   //
+  LOG(INFO) << "MemoryLogDeviceFactory::open_log_device calling truncate";
   this->truncate(instance->driver().impl(), *scan_status);
 
   return instance;

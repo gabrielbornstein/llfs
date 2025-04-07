@@ -27,6 +27,8 @@ Status initialize_ioring_log_device(RawBlockFile& file, const IoRingLogConfig& c
 {
   LLFS_VLOG(1) << "initializing IoRingLogDevice; " << BATT_INSPECT(config.block_count())
                << BATT_INSPECT(config.block_size()) << BATT_INSPECT(config.block_capacity());
+  LOG(INFO) << "initializing IoRingLogDevice; " << BATT_INSPECT(config.block_count())
+  << BATT_INSPECT(config.block_size()) << BATT_INSPECT(config.block_capacity());
 
   batt::LatencyMetric block_write_latency;
   {
@@ -69,6 +71,7 @@ Status initialize_ioring_log_device(RawBlockFile& file, const IoRingLogConfig& c
   }  // LatencyTimer
 
   LLFS_VLOG(1) << "Success! " << block_write_latency.rate_per_second() << " blocks/sec";
+  LOG(INFO) << "Success! " << block_write_latency.rate_per_second() << " blocks/sec";
 
   return OkStatus();
 }

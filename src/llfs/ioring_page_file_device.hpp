@@ -35,6 +35,11 @@ class IoRingPageFileDevice : public PageDevice
 
   PageSize page_size() override;
 
+  /**
+   * Total size of the file backing this IORingPageFileDevice
+   */
+  StatusOr<i64> file_size() const;
+
   StatusOr<std::shared_ptr<PageBuffer>> prepare(PageId page_id) override;
 
   void write(std::shared_ptr<const PageBuffer>&& page_buffer, WriteHandler&& handler) override;
@@ -42,6 +47,11 @@ class IoRingPageFileDevice : public PageDevice
   void read(PageId id, ReadHandler&& handler) override;
 
   void drop(PageId id, WriteHandler&& handler) override;
+
+  /**
+   * Currently, can only increase in size. Decreasing is not supported and will error.
+   */
+  Status resize(size_t size) const;
 
  private:
   //+++++++++++-+-+--+----- --- -- -  -  -   -

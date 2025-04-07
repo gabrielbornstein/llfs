@@ -40,6 +40,16 @@ PageSize IoRingPageFileDevice::page_size()
   return PageSize{batt::checked_cast<u32>(this->config_->page_size())};
 }
 
+StatusOr<i64> IoRingPageFileDevice::file_size() const {
+
+  int fd = this->file_.get_fd();
+
+  StatusOr<i64> fd_size = sizeof_fd(fd);
+  BATT_REQUIRE_OK(fd_size);
+
+  return *fd_size;
+}
+
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 StatusOr<std::shared_ptr<PageBuffer>> IoRingPageFileDevice::prepare(PageId page_id)
@@ -55,7 +65,9 @@ StatusOr<std::shared_ptr<PageBuffer>> IoRingPageFileDevice::prepare(PageId page_
 void IoRingPageFileDevice::write(std::shared_ptr<const PageBuffer>&& page_buffer,
                                  WriteHandler&& handler)
 {
+  VLOG(1) << "inside IoRingPageFileDevice::write";
   StatusOr<i64> page_offset_in_file = this->get_file_offset_of_page(page_buffer->page_id());
+
   if (!page_offset_in_file.ok()) {
     handler(page_offset_in_file.status());
     return;
@@ -228,11 +240,61 @@ void IoRingPageFileDevice::drop(PageId id, WriteHandler&& handler)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+Status IoRingPageFileDevice::resize(size_t size) const
+{
+    int fd = this->file_.get_fd();
+    // TODO: [Gabe Bornstein 3/17/25] This is only used for logging.
+    //
+    StatusOr<i64> fd_size = sizeof_fd(fd);
+    BATT_REQUIRE_OK(fd_size);
+
+    // Currently, we only support increasing the size of the backing file.
+    // 
+    BATT_ASSERT_GT(*fd_size, fd);
+
+    VLOG(1) << "Increasing the size of fd == " << fd << " from: " << *fd_size << " to : " << size;
+    BATT_REQUIRE_OK(truncate_fd(fd, size));
+
+    return OkStatus();
+}
+
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 StatusOr<u64> IoRingPageFileDevice::get_physical_page(PageId page_id) const
 {
-  const i64 physical_page = this->page_ids_.get_physical_page(page_id);
+  i64 physical_page = this->page_ids_.get_physical_page(page_id);
+  // Increase size of backing file if physical_page is out of range.
+  // 
+  VLOG(1) << "inside get_physical_page of fd == " << this->file_.get_fd();
+  // TODO: [Gabe Bornstein 3/18/15] Kinda weird to do this in get_physical_page. 
+  // Sometimes, we might just be reading a page, but if that page is not in a valid range, 
+  // we'll increase the llfs file size, which isn't desirable. Consider moving to `write`.
+  // 
+  // TODO: [Gabe Bornstein 3/19/25] Instead of using physical_page > this->config_->page_count,
+  // can I map the physical_page to a physical_file_offset, and get the max physical_file_offset?
+  // Alternatively, edit the above call to get_physical_page to return -1 when it references a page off the end of the file.
+  // 
+  // TODO: [Gabe Bornstein 3/26/25] Change how the initialize config_->page_count s.t. we have an current_disk_page_count, and a max_page_count.
+  // 
+  VLOG(1) << "Checking (physical_page (" << physical_page << ") > this->config_->page_count (" << this->config_->page_count << ") )";
   if (physical_page > this->config_->page_count || physical_page < 0) {
-    return Status{batt::StatusCode::kOutOfRange};
+    batt::StatusOr<i64> fd_size = this->file_size();
+    BATT_REQUIRE_OK(fd_size);
+
+    // Double current file size if we try to write off the end of the file.
+    // 
+    VLOG(1) << "Doubling the PageDevice size from: " << *fd_size << " to : " << 2 * (*fd_size);
+    batt::Status resize_status = this->resize(2 * (*fd_size));
+    BATT_REQUIRE_OK(resize_status);
+
+    // Check if physical page is now in range
+    //
+    physical_page = this->page_ids_.get_physical_page(page_id);
+
+    if (physical_page > this->config_->page_count || physical_page < 0) {
+      return Status{batt::StatusCode::kOutOfRange};
+    }
   }
 
   return physical_page;

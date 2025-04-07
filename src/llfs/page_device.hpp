@@ -45,6 +45,8 @@ class PageDevice
 
   virtual PageSize page_size() = 0;
 
+  // virtual StatusOr<i64> file_size() = 0;
+
   // For convenience...
   //
   PageCount capacity()
@@ -86,6 +88,11 @@ class PageDevice
   // Delete phase
   //
   virtual void drop(PageId id, PageDevice::WriteHandler&& handler) = 0;
+
+  //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+  // Increase Capacity
+  //
+  // virtual Status resize(size_t size) = 0;
 
  protected:
   PageDevice() = default;

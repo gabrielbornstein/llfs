@@ -131,6 +131,10 @@ inline Status BasicIoRingLogDriver<FlushOpImpl, StorageT>::read_log_data()
     this->storage_.reset_event_loop();
   });
 
+  // TODO: [Gabe Bornstein 3/21/25] Potential location that needs to be refactored.
+  // Upon "recovery" of log device, we no longer want to attempt to read in all the pages.
+  // Just the pages that are available in the original configuration.
+  //
   IoRingLogRecovery recovery{
       this->config_, this->context_.buffer_,
       /*read_data_fn=*/[this](i64 file_offset, MutableBuffer buffer) -> Status {

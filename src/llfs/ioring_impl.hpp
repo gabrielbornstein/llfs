@@ -325,6 +325,8 @@ inline void IoRingImpl::submit(
   //
   io_uring_sqe_set_data(sqe, static_cast<CompletionHandler*>(op_handler));
 
+  LOG(INFO) << "Inside IoRingImpl::submit";
+
   // Increment work count; decrement in invoke_handler.
   //
   LLFS_DVLOG(1) << "(submit) before; " << BATT_INSPECT(this->work_count_);

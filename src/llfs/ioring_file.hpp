@@ -202,6 +202,8 @@ inline void IoRing::File::async_read_some(i64 offset, const MutableBuffer& buffe
           LLFS_DVLOG(1) << "async_read_some - NOT registered fd " << BATT_INSPECT(int(sqe->flags));
         } else {
           LLFS_DVLOG(1) << "async_read_some - registered fd";
+          // TODO: [Gabe Bornstein 3/24/25] This line isn't setting buffer.size() to zero when expected
+          // 
           io_uring_prep_read(sqe, this->registered_fd_, buffer.data(), buffer.size(), offset);
           sqe->flags |= IOSQE_FIXED_FILE;
         }

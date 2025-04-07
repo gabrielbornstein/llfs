@@ -38,14 +38,22 @@ Status IoRingLogRecovery::run()
   Optional<slot_offset_type> old_trim_pos = this->trim_pos_;
 
   usize known_valid_blocks = 1;
-  const usize block_count = this->config_.block_count();
+  const usize block_count = /*this->config_.block_count()*/1;
   const usize wrap_around_size = block_count * this->config_.block_capacity();
 
+  // TODO: [Gabe Bornstein 3/21/25] Potential issue with how we're reading blocks.
+  // I believe we are attempting to read blocks/pages that are not valid upon llfs file initialization.
+  // Need to alter the config s.t. it has an initial size we read up to as opposed to trying all of the pages.
+  // 
   for (usize block_i = 0; block_i < known_valid_blocks;
        ++block_i, file_offset += this->config_.block_size()) {
     //----- --- -- -  -  -   -
     LLFS_VLOG(2) << "Reading " << BATT_INSPECT(block_i) << "/" << block_count << " from "
                  << BATT_INSPECT(file_offset) << BATT_INSPECT(this->block_buffer().size());
+
+    LOG(INFO) << "Reading " << BATT_INSPECT(block_i) << "/" << block_count << " from "
+              << BATT_INSPECT(file_offset) << BATT_INSPECT(this->block_buffer().size());
+    LOG(INFO) << "Reading known_valid_blocks==" << known_valid_blocks; 
 
     BATT_CHECK_LE(known_valid_blocks, block_count);
 

@@ -295,55 +295,84 @@ StatusOr<std::shared_ptr<PageBuffer>> PageCache::allocate_page_of_size(
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 StatusOr<std::shared_ptr<PageBuffer>> PageCache::allocate_page_of_size_log2(
-    PageSizeLog2 size_log2, batt::WaitForResource wait_for_resource, u64 callers, u64 job_id,
-    const batt::CancelToken& cancel_token)
+  PageSizeLog2 size_log2, batt::WaitForResource wait_for_resource, u64 callers, u64 job_id,
+  const batt::CancelToken& cancel_token)
 {
-  BATT_CHECK_LT(size_log2, kMaxPageSizeLog2);
+BATT_CHECK_LT(size_log2, kMaxPageSizeLog2);
 
-  LatencyTimer alloc_timer{this->metrics_.allocate_page_alloc_latency};
+LatencyTimer alloc_timer{this->metrics_.allocate_page_alloc_latency};
 
-  Slice<PageDeviceEntry* const> device_entries = this->devices_with_page_size_log2(size_log2);
+static const char* kOperationName = "PageCache::allocate_page_of_size_log2";
 
-  // TODO [tastolfi 2021-09-08] If the caller wants to wait, which device should we wait on?  First
-  // available? Random?  Round-Robin?
-  //
-  for (auto wait_arg : {batt::WaitForResource::kFalse, batt::WaitForResource::kTrue}) {
-    for (PageDeviceEntry* device_entry : device_entries) {
-      PageArena& arena = device_entry->arena;
-      StatusOr<PageId> page_id = arena.allocator().allocate_page(wait_arg, cancel_token);
-      if (!page_id.ok()) {
-        if (page_id.status() == batt::StatusCode::kResourceExhausted) {
-          const u64 page_size = u64{1} << size_log2;
-          LLFS_LOG_INFO_FIRST_N(1)  //
-              << "Failed to allocate page (pool is empty): " << BATT_INSPECT(page_size);
-        }
-        continue;
-      }
+// TODO: [Gabe Bornstein 6/19/24] Tony mentioned there's a different method besides
+// `with_retry_policy` that we could use. It could potentially cause less congestion in the
+// pipeline of CheckpointGenerator -> Trim -> PageRecycler -> Etc. However, it's more complicated
+//
+return                        //
+    batt::with_retry_policy(  //
+                              // TODO: [Gabe Bornstein 6/20/24] Ensure MAX waittime is < 100 ms
+                              //
+        batt::ExponentialBackoff{
+            .max_attempts = ~u64{0},
+            .initial_delay_usec = 500,
+            .backoff_factor = 3,
+            .backoff_divisor = 2,
+            .max_delay_usec = 1000 * 100,
+        },
+        kOperationName,  //
+        [this, &size_log2, &cancel_token, &job_id, &callers, &wait_for_resource] {
 
-      BATT_CHECK_EQ(PageIdFactory::get_device_id(*page_id), arena.id());
+          batt::StatusOr<std::shared_ptr<PageBuffer>> page_buffer;
+          batt::Status s = batt::StatusCode::kResourceExhausted;
+          page_buffer = s;
 
-      LLFS_VLOG(1) << "allocated page " << *page_id;
+          Slice<PageDeviceEntry* const> device_entries =
+              this->devices_with_page_size_log2(size_log2);
+          // TODO: [Gabe Bornstein 6/20/24] Currently, we're dropping the state lock in between
+          // `update_available_pages` and `allocate_page`. Could this cause issues? Could we run
+          // out of pages?
+          //
 
-      this->track_new_page_event(NewPageTracker{
-          .ts = 0,
-          .job_id = job_id,
-          .page_id = *page_id,
-          .callers = callers,
-          .event_id = (int)NewPageTracker::Event::kAllocate,
-      });
+          // If available_pages does not have not have any pages that match device_entries,
+          // nothing to do. No available pages. Return and try again.
+          //
+          for (PageDeviceEntry* const device_entry : device_entries) {
+            const PageArena& arena = device_entry->arena;
+            StatusOr<PageId> page_id =
+                arena.allocator().allocate_page(batt::WaitForResource::kFalse, cancel_token);
+            if (!page_id.ok()) {
+              if (page_id.status() == batt::StatusCode::kResourceExhausted) {
+                const u64 page_size = u64{1} << size_log2;
+                LLFS_LOG_INFO_FIRST_N(1)  //
+                    << "Failed to allocate page (pool is empty): " << BATT_INSPECT(page_size);
+              }
+              continue;
+            }
+            BATT_CHECK_EQ(PageIdFactory::get_device_id(*page_id), arena.id());
 
-      // PageDevice::prepare must be thread-safe.
-      //
-      return arena.device().prepare(*page_id);
-    }
+            LLFS_VLOG(1) << "allocated page " << *page_id;
 
-    if (wait_for_resource == batt::WaitForResource::kFalse) {
-      break;
-    }
-  }
+            this->track_new_page_event(NewPageTracker{
+                .ts = 0,
+                .job_id = job_id,
+                .page_id = *page_id,
+                .callers = callers,
+                .event_id = (int)NewPageTracker::Event::kAllocate,
+            });
+            // PageDevice::prepare must be thread-safe.
+            //
+            page_buffer = arena.device().prepare(*page_id);
+            break;
+          }
 
-  LLFS_LOG_WARNING() << "No arena with free space could be found";
-  return Status{batt::StatusCode::kUnavailable};  // TODO [tastolfi 2021-10-20]
+          return page_buffer;
+        },                                   //
+        batt::TaskSleepImpl{},               //
+        [](const batt::Status& s) -> bool {  //
+          VLOG(2) << "batt::StatusCode::kResourceExhausted == "
+                  << (s == batt::StatusCode::kResourceExhausted);
+          return batt::status_is_retryable(s) || (s == batt::StatusCode::kResourceExhausted);
+        });
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

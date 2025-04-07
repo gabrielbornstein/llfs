@@ -136,6 +136,7 @@ Status truncate_file(std::string_view file_name, u64 size)
 //
 Status truncate_fd(int fd, u64 size)
 {
+  LOG(INFO) << "Filesystem::truncate_fd on fd==" << fd << ", size==" << size;
   const int retval = syscall_retry([&] {
     return ::ftruncate(fd, size);
   });

@@ -90,7 +90,7 @@ Status StorageContext::add_existing_file(const batt::SharedPtr<StorageFile>& fil
           this->index_.emplace(slot->uuid,
                                batt::make_shared<StorageObjectInfo>(batt::make_copy(file), slot));
         });
-
+  LOG(INFO) << "Exiting StorageContext::add_existing_file";
   return OkStatus();
 }
 

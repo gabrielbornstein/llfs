@@ -37,13 +37,20 @@ Status configure_storage_object(StorageFileBuilder::Transaction& txn,
                                 FileOffsetPtr<PackedLogDeviceConfig&> p_config,
                                 const LogDeviceConfigOptions& options)
 {
-  const i64 logical_size = round_up_to_page_size_multiple(options.log_size);
+  // TODO: [Gabe Bornstein 3/24/25] Start with an initial log_size, and add option for a max log size.
+  // 
+  const i64 logical_size = round_up_to_page_size_multiple(/*options.log_size*/1);
   const u32 pages_per_block_log2 =
       options.pages_per_block_log2.value_or(IoRingLogConfig::kDefaultPagesPerBlockLog2);
   const u64 pages_per_block = u64{1} << pages_per_block_log2;
   const u64 block_size = pages_per_block * kLogPageSize;
+  // TODO: [Gabe Bornstein 3/24/25] Change this function/ setting of physical_size. 
+  // Instead of calculating the max size we need either 1. Calculate the min size, or 2. Get some default param.
+  // 
   const i64 physical_size =
       IoRingLogDriver::disk_size_required_for_log_size(logical_size, block_size);
+      LOG(INFO) << "LogDeviceConfig::configure_storage_object, physical_size = " << physical_size << ", logical_size = " << logical_size << ", pages_per_block = " 
+            << pages_per_block << ", block_size = " << block_size;
 
   Interval<i64> blocks_offset = txn.reserve_aligned(/*bits=*/kLogPageSizeLog2, physical_size);
 
@@ -64,6 +71,7 @@ Status configure_storage_object(StorageFileBuilder::Transaction& txn,
       {
         BATT_CHECK_EQ(BATT_CHECKED_CAST(i64, config.physical_offset + config.physical_size),
                       blocks_offset.upper_bound);
+        LOG(INFO) << "log_device_config configure_storage_object calling truncate_at_least";
         Status truncate_status =
             file.truncate_at_least(config.physical_offset + config.physical_size);
         BATT_REQUIRE_OK(truncate_status);
