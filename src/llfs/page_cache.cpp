@@ -212,9 +212,7 @@ const PageCacheOptions& PageCache::options() const
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-Status PageCache::set_filter_builder(batt::TaskScheduler& task_scheduler, PageSize src_page_size,
-                                     PageSize filter_page_size,
-                                     std::unique_ptr<PageFilterBuilder>&& filter_builder) noexcept
+Status PageCache::assign_filter_device(PageSize src_page_size, PageSize filter_page_size) noexcept
 {
   // Find and cache the PageDeviceEntry for the filter device and leaf device.
   //
@@ -260,14 +258,17 @@ Status PageCache::set_filter_builder(batt::TaskScheduler& task_scheduler, PageSi
     return batt::StatusCode::kNotFound;
   }
 
-  found_src_entry->filter_builder_task =
-      std::make_unique<PageFilterBuilderTask>(task_scheduler,                                   //
-                                              std::move(filter_builder),                        //
-                                              std::addressof(found_src_entry->arena.device()),  //
-                                              std::addressof(found_filter_entry->arena.device()));
+  BATT_CHECK_EQ(found_src_entry->filter_device_entry, nullptr);
+  BATT_CHECK_EQ(found_src_entry->is_filter_device_for, nullptr);
+  BATT_CHECK_EQ(found_filter_entry->filter_device_entry, nullptr);
+  BATT_CHECK_EQ(found_filter_entry->is_filter_device_for, nullptr);
 
+  found_src_entry->filter_device_entry = found_filter_entry;
+  found_src_entry->filter_device_id = found_filter_entry->arena.device().get_id();
+
+  found_filter_entry->is_filter_device_for = found_src_entry;
+  found_filter_entry->is_filter_device_for_id = found_src_entry->arena.device().get_id();
   found_filter_entry->can_alloc = false;
-  found_filter_entry->owning_filter_builder = found_src_entry->filter_builder_task.get();
 
   return OkStatus();
 }
@@ -318,9 +319,6 @@ void PageCache::close()
   for (const std::unique_ptr<PageDeviceEntry>& entry : this->page_devices_) {
     if (entry) {
       entry->arena.halt();
-      if (entry->filter_builder_task) {
-        entry->filter_builder_task->halt();
-      }
     }
   }
 }
@@ -332,9 +330,6 @@ void PageCache::join()
   for (const std::unique_ptr<PageDeviceEntry>& entry : this->page_devices_) {
     if (entry) {
       entry->arena.join();
-      if (entry->filter_builder_task) {
-        entry->filter_builder_task->join();
-      }
     }
   }
 }
@@ -561,10 +556,6 @@ void PageCache::async_write_new_page(PinnedPage&& pinned_page,
   PageDeviceEntry& entry = *this->page_devices_[device_id_val];
 
   entry.arena.device().write(pinned_page.get_page_buffer(), std::move(handler));
-
-  if (entry.filter_builder_task) {
-    entry.filter_builder_task->push(std::move(pinned_page)).IgnoreError();
-  }
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -639,18 +630,6 @@ void PageCache::purge(PageId page_id, u64 callers, u64 job_id)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-PageDeviceEntry* PageCache::get_device_for_page(PageId page_id)
-{
-  const page_device_id_int device_id = PageIdFactory::get_device_id(page_id);
-  if (BATT_HINT_FALSE(device_id >= this->page_devices_.size())) {
-    return nullptr;
-  }
-
-  return this->page_devices_[device_id].get();
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
 StatusOr<PinnedPage> PageCache::get_page_with_layout_in_job(
     PageId page_id, const Optional<PageLayoutId>& require_layout, PinPageToJob pin_page_to_job,
     OkIfNotFound ok_if_not_found)
@@ -659,7 +638,7 @@ StatusOr<PinnedPage> PageCache::get_page_with_layout_in_job(
     return Status{batt::StatusCode::kUnimplemented};
   }
 
-  ++this->metrics_.get_count;
+  this->metrics_.get_count.add(1);
 
   if (!page_id) {
     return ::llfs::make_status(StatusCode::kPageIdInvalid);
@@ -694,7 +673,8 @@ auto PageCache::find_page_in_cache(PageId page_id, const Optional<PageLayoutId>&
   PageDeviceEntry* const entry = this->get_device_for_page(page_id);
   BATT_CHECK_NOT_NULLPTR(entry);
 
-  return entry->cache.find_or_insert(page_id, [&](const PageCacheSlot::PinnedRef& pinned_slot) {
+  return entry->cache.find_or_insert(page_id, [this, entry, &required_layout, ok_if_not_found](
+                                                  const PageCacheSlot::PinnedRef& pinned_slot) {
     entry->cache.metrics().miss_count.add(1);
     this->async_load_page_into_slot(pinned_slot, required_layout, ok_if_not_found);
   });
@@ -711,21 +691,9 @@ void PageCache::async_load_page_into_slot(const PageCacheSlot::PinnedRef& pinned
   PageDeviceEntry* const entry = this->get_device_for_page(page_id);
   BATT_CHECK_NOT_NULLPTR(entry);
 
-  auto reader_lock = [&]() -> std::shared_ptr<batt::ReadWriteLock::Reader> {
-    if (entry->owning_filter_builder) {
-      return entry->owning_filter_builder->lock_page(
-          page_id, batt::StaticType<batt::ReadWriteLock::Reader>{});
-    }
-    return nullptr;
-  }();
-
   entry->arena.device().read(
       page_id,
       /*read_handler=*/[this, required_layout, ok_if_not_found,
-
-                        // Serialize read/write access to this page with the filter builder.
-                        //
-                        reader_lock = std::move(reader_lock),
 
                         // Save the metrics and start time so we can record read latency etc.
                         //
@@ -737,10 +705,6 @@ void PageCache::async_load_page_into_slot(const PageCacheSlot::PinnedRef& pinned
                         pinned_slot = batt::make_copy(pinned_slot)
 
   ](StatusOr<std::shared_ptr<const PageBuffer>>&& result) mutable {
-        // Release the reader lock.
-        //
-        reader_lock = nullptr;
-
         const PageId page_id = pinned_slot.key();
         auto* p_metrics = &this->metrics_;
         auto page_readers = this->page_readers_;

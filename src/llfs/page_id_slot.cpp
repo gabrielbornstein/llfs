@@ -52,15 +52,15 @@ namespace llfs {
 /*static*/ batt::StatusOr<PinnedPage> PageIdSlot::try_pin_impl(
     PageCacheSlot::AtomicRef& cache_slot_ref, PageId page_id) noexcept
 {
-  PageIdSlot::metrics().load_total_count.fetch_add(1);
+  PageIdSlot::metrics().load_total_count.add(1);
 
   PageCacheSlot::PinnedRef cache_slot = cache_slot_ref.pin(page_id);
   if (!cache_slot) {
-    PageIdSlot::metrics().load_slot_miss_count.fetch_add(1);
+    PageIdSlot::metrics().load_slot_miss_count.add(1);
     return make_status(StatusCode::kPinFailedPageEvicted);
   }
 
-  PageIdSlot::metrics().load_slot_hit_count.fetch_add(1);
+  PageIdSlot::metrics().load_slot_hit_count.add(1);
 
   batt::StatusOr<std::shared_ptr<const PageView>> page_view = cache_slot->await();
   BATT_REQUIRE_OK(page_view);

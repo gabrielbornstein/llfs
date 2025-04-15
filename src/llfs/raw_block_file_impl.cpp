@@ -57,8 +57,9 @@ StatusOr<i64> IoRingRawBlockFile::write_some(i64 offset, const ConstBuffer& data
   StatusOr<i64> result = batt::Task::await<batt::StatusOr<i64>>([&](auto&& handler) {
     this->file_.async_write_some(offset, data, BATT_FORWARD(handler));
   });
+
   BATT_REQUIRE_OK(result) << BATT_INSPECT(offset) << BATT_INSPECT(data.data())
-                          << BATT_INSPECT(data.size());
+                          << BATT_INSPECT(data.size()) << boost::stacktrace::stacktrace{};
 
   /*
   const int retval = batt::syscall_retry([&] {

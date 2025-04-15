@@ -27,7 +27,7 @@ class PageCacheSlot::Pool : public boost::intrusive_ref_counter<Pool>
   /** \brief The default number of randomly-selected slots to consider when trying to evict a slot
    * that hasn't been accessed recently.
    */
-  static constexpr usize kDefaultEvictionCandidates = 8;
+  static constexpr usize kDefaultEvictionCandidates = 2;
 
   /** \brief Aligned storage type for a single PageCacheSlot.  We allocate an array of this type
    * when constructing a Pool object, then construct the individual slots via placement-new as they
@@ -40,17 +40,18 @@ class PageCacheSlot::Pool : public boost::intrusive_ref_counter<Pool>
    */
   struct Metrics {
     CountMetric<i64> max_slots{0};
-    CountMetric<i64> indexed_slots{0};
-    CountMetric<i64> query_count{0};
-    CountMetric<i64> hit_count{0};
-    CountMetric<i64> stale_count{0};
-    CountMetric<i64> alloc_count{0};
-    CountMetric<i64> evict_count{0};
-    CountMetric<i64> admit_count{0};
-    CountMetric<i64> insert_count{0};
-    CountMetric<i64> miss_count{0};
-    CountMetric<i64> erase_count{0};
-    CountMetric<i64> full_count{0};
+    FastCountMetric<i64> indexed_slots{0};
+    FastCountMetric<i64> query_count{0};
+    FastCountMetric<i64> hit_count{0};
+    FastCountMetric<i64> stale_count{0};
+    FastCountMetric<i64> alloc_count{0};
+    FastCountMetric<i64> evict_count{0};
+    FastCountMetric<i64> evict_prior_generation_count{0};
+    FastCountMetric<i64> admit_count{0};
+    FastCountMetric<i64> insert_count{0};
+    FastCountMetric<i64> miss_count{0};
+    FastCountMetric<i64> erase_count{0};
+    FastCountMetric<i64> full_count{0};
 
     //+++++++++++-+-+--+----- --- -- -  -  -   -
 

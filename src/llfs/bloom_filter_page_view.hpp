@@ -26,10 +26,6 @@ namespace llfs {
 class BloomFilterPageView : public PageView
 {
  public:
-  /** \brief The page layout id for all instances of this class.
-   */
-  static PageLayoutId page_layout_id();
-
   /** \brief Returns the PageReader for this layout.
    */
   static PageReader page_reader();
@@ -47,7 +43,7 @@ class BloomFilterPageView : public PageView
 
   PageLayoutId get_page_layout_id() const override
   {
-    return BloomFilterPageView::get_page_layout_id();
+    return PackedBloomFilterPage::page_layout_id();
   }
 
   BoxedSeq<PageId> trace_refs() const override
@@ -68,6 +64,11 @@ class BloomFilterPageView : public PageView
   std::shared_ptr<PageFilter> build_filter() const override
   {
     return std::make_shared<NullPageFilter>(this->page_id());
+  }
+
+  void check_integrity() const
+  {
+    this->packed_->check_integrity();
   }
 
   void dump_to_ostream(std::ostream& out) const override

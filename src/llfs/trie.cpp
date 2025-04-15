@@ -20,8 +20,17 @@ namespace {
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename SubtreeOffset>
-usize packed_sizeof_bp_trie_node(const BPTrieNode* node, batt::Interval<usize> range, i64& space)
+usize packed_sizeof_bp_trie_node(const BPTrieNode* node, batt::Interval<usize> range, i64& space,
+                                 bool verbose)
 {
+  //----- --- -- -  -  -   -
+  thread_local i32 depth = 0;
+  ++depth;
+  auto on_scope_exit = batt::finally([&] {
+    --depth;
+  });
+  //----- --- -- -  -  -   -
+
   if (!node) {
     return 0;
   }
@@ -34,36 +43,49 @@ usize packed_sizeof_bp_trie_node(const BPTrieNode* node, batt::Interval<usize> r
   usize left_subtree_size = 0;
   usize right_subtree_size = 0;
 
+  LOG_IF(INFO, verbose) << std::string(depth * 4, ' ') << BATT_INSPECT(node_size);
+
   if (node->left_) {
     BATT_CHECK_NOT_NULLPTR(node->right_);
 
     // pivot (always u8)
     //
     node_size += 1;
+    LOG_IF(INFO, verbose) << std::string(depth * 4, ' ') << "(have subtrees) "
+                          << BATT_INSPECT(node_size);
 
     // pivot_pos
     //
     const usize pivot_pos_size = batt::log2_ceil((usize)range.size()) / 8 + 1;
     BATT_CHECK_LT(range.size(), 1 << (pivot_pos_size * 8));
     node_size += pivot_pos_size;
+    LOG_IF(INFO, verbose) << std::string(depth * 4, ' ') << BATT_INSPECT(node_size);
 
     //  left, right pointers
     //
     node_size += sizeof(PackedPointer<PackedBPTrieNodeBase, SubtreeOffset>) * 2;
+    LOG_IF(INFO, verbose) << std::string(depth * 4, ' ') << BATT_INSPECT(node_size);
 
     space -= (i64)node_size;
-    if (space > 0) {
+    LOG_IF(INFO, verbose) << std::string(depth * 4, ' ') << BATT_INSPECT(space);
+    if (space >= 0) {
       const usize middle = range.lower_bound + node->pivot_pos_;
 
       left_subtree_size = packed_sizeof_bp_trie_node<SubtreeOffset>(
-          node->left_, batt::Interval<usize>{range.lower_bound, middle}, space);
+          node->left_, batt::Interval<usize>{range.lower_bound, middle}, space, verbose);
 
       right_subtree_size = packed_sizeof_bp_trie_node<SubtreeOffset>(
-          node->right_, batt::Interval<usize>{middle, range.upper_bound}, space);
+          node->right_, batt::Interval<usize>{middle, range.upper_bound}, space, verbose);
     }
   } else {
+    BATT_CHECK_EQ(node->right_, nullptr);
     space -= (i64)node_size;
   }
+
+  LOG_IF(INFO, verbose) << std::string(depth * 4, ' ')
+                        << "total_size=" << node_size + left_subtree_size + right_subtree_size
+                        << BATT_INSPECT(space) << BATT_INSPECT(node->subtree_node_count_);
+
   return node_size + left_subtree_size + right_subtree_size;
 }
 
@@ -71,29 +93,46 @@ usize packed_sizeof_bp_trie_node(const BPTrieNode* node, batt::Interval<usize> r
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-usize packed_sizeof(const BPTrie& object)
+usize BPTrie::packed_size(bool verbose) const
 {
+  u64 observed = this->packed_size_.load();
+  if (observed != kInvalidPackedSize) {
+    return observed;
+  }
+
+  const BPTrie& object = *this;
   batt::Interval<usize> range{0, object.size()};
 
   const BPTrieNode* root = object.root();
 
-  i64 space = 0xff;
-  usize z = sizeof(PackedBPTrie) + packed_sizeof_bp_trie_node<u8>(root, range, space);
+  i64 space = i64{1} << 8;
+  u64 z = sizeof(PackedBPTrie) + packed_sizeof_bp_trie_node<little_u8>(root, range, space, verbose);
   if (space < 0) {
-    space = 0xffff;
-    z = sizeof(PackedBPTrie) + packed_sizeof_bp_trie_node<little_u16>(root, range, space);
+    space = i64{1} << 16;
+    z = sizeof(PackedBPTrie) + packed_sizeof_bp_trie_node<little_u16>(root, range, space, verbose);
     if (space < 0) {
-      space = 0xffffffl;
-      z = sizeof(PackedBPTrie) + packed_sizeof_bp_trie_node<little_u24>(root, range, space);
+      space = i64{1} << 24;
+      z = sizeof(PackedBPTrie) +
+          packed_sizeof_bp_trie_node<little_u24>(root, range, space, verbose);
       if (space < 0) {
-        space = 0xffffffffl;
-        z = sizeof(PackedBPTrie) + packed_sizeof_bp_trie_node<little_u32>(root, range, space);
+        space = i64{1} << 32;
+        z = sizeof(PackedBPTrie) +
+            packed_sizeof_bp_trie_node<little_u32>(root, range, space, verbose);
         BATT_CHECK_GE(space, 0);
       }
     }
   }
 
+  this->packed_size_.compare_exchange_strong(observed, z);
+
   return z;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+usize packed_sizeof(const BPTrie& object)
+{
+  return object.packed_size(/*verbose=*/false);
 }
 
 namespace {
@@ -193,19 +232,19 @@ PackedBPTrie* build_packed_trie(const BPTrie& object, PackedBPTrie* packed, Data
       return parent;
     };
 
-    if (next.range.size() <= 0xff) {
+    if (next.range.size() <= isize{0xff}) {
       if (!pack_parent(batt::StaticType<PackedBPTrieNodeParent<u8, SubtreeOffset>>{})) {
         return nullptr;
       }
-    } else if (next.range.size() <= 0xffff) {
+    } else if (next.range.size() <= isize{0xffff}) {
       if (!pack_parent(batt::StaticType<PackedBPTrieNodeParent<little_u16, SubtreeOffset>>{})) {
         return nullptr;
       }
-    } else if (next.range.size() <= 0xffffffl) {
+    } else if (next.range.size() <= isize{0xffffff}) {
       if (!pack_parent(batt::StaticType<PackedBPTrieNodeParent<little_u24, SubtreeOffset>>{})) {
         return nullptr;
       }
-    } else if (next.range.size() <= 0xffffffffl) {
+    } else if (next.range.size() <= isize{0xffffffff}) {
       if (!pack_parent(batt::StaticType<PackedBPTrieNodeParent<little_u32, SubtreeOffset>>{})) {
         return nullptr;
       }

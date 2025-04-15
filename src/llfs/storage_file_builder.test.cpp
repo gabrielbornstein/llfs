@@ -137,13 +137,14 @@ class StorageFileBuilderTest : public ::testing::Test
   }
 
   // Writes random data to disk given the file, offset, and amount of data to write. write_offset
-  // and write_size must be multiples of 512.
+  // and write_size must be multiples of the block size.
   //
   llfs::Status write_rand_data(llfs::IoRingRawBlockFile& test_file, i64 write_offset,
                                i64 write_size)
   {
     constexpr i64 kMaxBufferSize = 32768;
-    constexpr i64 kBufferAlign = 512;
+    constexpr i64 kBufferAlign = llfs::kDirectIOBlockAlign;
+
     if (write_offset % kBufferAlign != 0 || write_size % kBufferAlign != 0) {
       return batt::Status{batt::StatusCode::kInvalidArgument};
     }
@@ -161,7 +162,7 @@ class StorageFileBuilderTest : public ::testing::Test
     while (write_size > 0) {
       u64 buffer_size = std::min(kMaxBufferSize, write_size);
 
-      // Fill random data in 512 aligned rand_data
+      // Fill random data in block aligned rand_data
       //
       for (u64 i = 0; i < buffer_size / sizeof(u64); i++) {
         rand_data.items[i] = distrib(gen);
@@ -253,11 +254,11 @@ TEST_F(StorageFileBuilderTest, PageDeviceConfig_Flush)
       if (!llfs::kFastIoRingPageDeviceInit) {
         EXPECT_CALL(file_mock, write_some(::testing::Gt(kExpectedConfigBlockOffset),
                                           ::testing::Truly([](const llfs::ConstBuffer& b) {
-                                            return b.size() == 512;
+                                            return b.size() == llfs::kDirectIOBlockSize;
                                           })))
             .Times(options.page_count)
             .InSequence(flush_sequence)
-            .WillRepeatedly(::testing::Return(512));
+            .WillRepeatedly(::testing::Return(llfs::kDirectIOBlockSize));
       }
 
       EXPECT_CALL(file_mock,
@@ -404,7 +405,7 @@ TEST_F(StorageFileBuilderTest, WriteReadManyPackedConfigs)
     llfs::Status write_status = this->write_rand_data(
         test_file, /*write_offset=*/kBaseFileOffset,
         /*write_size=*/kBaseFileOffset + (kNumPackedConfigBlocks * llfs::PackedConfigBlock::kSize) +
-            (kSlots * kTestPageCount * /*llfs::PageSizeLog2{9}*/ 512));
+            (kSlots * kTestPageCount * llfs::kDirectIOBlockSize));
 
     ASSERT_TRUE(write_status.ok()) << BATT_INSPECT(write_status);
   }
@@ -424,7 +425,7 @@ TEST_F(StorageFileBuilderTest, WriteReadManyPackedConfigs)
         .uuid = llfs::None,
         .device_id = llfs::None,
         .page_count = llfs::PageCount{kTestPageCount},
-        .page_size_log2 = llfs::PageSizeLog2{9},
+        .page_size_log2 = llfs::PageSizeLog2{llfs::kDirectIOBlockSizeLog2},
     };
 
     llfs::StatusOr<llfs::FileOffsetPtr<const llfs::PackedPageDeviceConfig&>> packed_config =
@@ -454,8 +455,8 @@ TEST_F(StorageFileBuilderTest, WriteReadManyPackedConfigs)
 
     ASSERT_EQ(config_blocks->size(), kNumPackedConfigBlocks);
 
-    ASSERT_NO_FATAL_FAILURE(
-        this->verify_storage_file_config_blocks(*config_blocks, /*page_size_log2=*/9));
+    ASSERT_NO_FATAL_FAILURE(this->verify_storage_file_config_blocks(
+        *config_blocks, /*page_size_log2=*/llfs::kDirectIOBlockSizeLog2));
 
     // Create StorageFile and add to StorageContext
     //

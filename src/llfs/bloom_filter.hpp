@@ -75,6 +75,12 @@ struct BloomFilterConfig {
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  static HashCount hash_count_from_bits_per_key(RealBitCount bits_per_key)
+  {
+    static const double ln2 = std::log(2);
+    return HashCount{(usize)std::ceil(bits_per_key * ln2)};
+  }
+
   static constexpr BloomFilterLayout kDefaultLayout = BloomFilterLayout::kFlat;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -191,7 +197,7 @@ struct BloomFilterQuery {
     this->hash.push_back(get_nth_hash_for_filter(this->key, 0));
   }
 
-  void update_cache(usize n_hashes) noexcept
+  void update_cache(usize n_hashes)
   {
     usize i = this->hash.size();
     if (BATT_HINT_FALSE(i < n_hashes)) {
@@ -202,7 +208,7 @@ struct BloomFilterQuery {
     }
   }
 
-  void update_mask(usize n_hashes, usize block_size) noexcept
+  void update_mask(usize n_hashes, usize block_size)
   {
     switch (block_size) {
       case 1:
@@ -216,6 +222,62 @@ struct BloomFilterQuery {
       default:
         BATT_PANIC() << "Invalid block size (words)=" << block_size;
         BATT_UNREACHABLE();
+    }
+  }
+
+  void update_mask_blocked512(usize n_hashes)
+  {
+    u64 hash_val;
+    usize hash_fn_i = 1;
+
+    this->mask.resize(8, 0);
+
+#define LLFS_PRODUCE_ONE_HASH_VAL()                                                                \
+  hash_val = get_nth_hash_for_filter(this->key, hash_fn_i);                                        \
+  ++hash_fn_i
+
+#define LLFS_CONSUME_ONE_HASH_VAL(base)                                                            \
+  case (base + 7):                                                                                 \
+    this->mask[hash_val & 0b111] |= u64{1} << ((hash_val >> 3) & 0b111111);                        \
+    hash_val >>= 9;                                                                                \
+  case (base + 6):                                                                                 \
+    this->mask[hash_val & 0b111] |= u64{1} << ((hash_val >> 3) & 0b111111);                        \
+    hash_val >>= 9;                                                                                \
+  case (base + 5):                                                                                 \
+    this->mask[hash_val & 0b111] |= u64{1} << ((hash_val >> 3) & 0b111111);                        \
+    hash_val >>= 9;                                                                                \
+  case (base + 4):                                                                                 \
+    this->mask[hash_val & 0b111] |= u64{1} << ((hash_val >> 3) & 0b111111);                        \
+    hash_val >>= 9;                                                                                \
+  case (base + 3):                                                                                 \
+    this->mask[hash_val & 0b111] |= u64{1} << ((hash_val >> 3) & 0b111111);                        \
+    hash_val >>= 9;                                                                                \
+  case (base + 2):                                                                                 \
+    this->mask[hash_val & 0b111] |= u64{1} << ((hash_val >> 3) & 0b111111);                        \
+    hash_val >>= 9;                                                                                \
+  case (base + 1):                                                                                 \
+    this->mask[hash_val & 0b111] |= u64{1} << ((hash_val >> 3) & 0b111111)
+
+    LLFS_PRODUCE_ONE_HASH_VAL();
+    switch (n_hashes) {
+      LLFS_CONSUME_ONE_HASH_VAL(56);
+      LLFS_PRODUCE_ONE_HASH_VAL();
+      LLFS_CONSUME_ONE_HASH_VAL(49);
+      LLFS_PRODUCE_ONE_HASH_VAL();
+      LLFS_CONSUME_ONE_HASH_VAL(42);
+      LLFS_PRODUCE_ONE_HASH_VAL();
+      LLFS_CONSUME_ONE_HASH_VAL(35);
+      LLFS_PRODUCE_ONE_HASH_VAL();
+      LLFS_CONSUME_ONE_HASH_VAL(28);
+      LLFS_PRODUCE_ONE_HASH_VAL();
+      LLFS_CONSUME_ONE_HASH_VAL(21);
+      LLFS_PRODUCE_ONE_HASH_VAL();
+      LLFS_CONSUME_ONE_HASH_VAL(14);
+      LLFS_PRODUCE_ONE_HASH_VAL();
+      LLFS_CONSUME_ONE_HASH_VAL(7);
+      LLFS_PRODUCE_ONE_HASH_VAL();
+      LLFS_CONSUME_ONE_HASH_VAL(0);
+      break;
     }
   }
 
@@ -276,8 +338,7 @@ struct BloomFilterQuery {
 
       // The mask should exactly as large as the block; all 0's initially.
       //
-      this->mask.resize(kBlockWord64Size);
-      this->mask.assign(kBlockWord64Size, 0);
+      this->mask.resize(kBlockWord64Size, 0);
 
       // Each time through the loop, we pull enough bits from this->hash[1..] to locate a single bit
       // within the mask.
@@ -405,57 +466,6 @@ struct PackedBloomFilter {
   // The actual filter array starts here (it will probably be larger than one element...)
   //
   little_u64 words[0];
-
-  //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-
-#if 0
-    {
-  // Approximate value of ln(2) * 65536 (fixed point, 16 bits decimal).
-  //
-  static constexpr u64 kLn2Fixed16 = 45426;
-
-  static u64 word_count_from_bit_count(u64 filter_bit_count)
-  {
-    return u64{1} << batt::log2_ceil((filter_bit_count + 63) / 64);
-  }
-
-  static u64 optimal_hash_count(double filter_size_in_bits, double item_count, u8 layout)
-  {
-    static const double ln2 = std::log(2.0);
-
-    if (layout == Self::kLayoutFlat) {
-      const double bit_rate = filter_size_in_bits / item_count;
-
-      return std::max<u64>(1, usize(bit_rate * ln2 - 0.5));
-    }
-
-    if (layout == Self::kLayoutBlocked64) {
-      const double block_count = std::floor(filter_size_in_bits / 64.0);
-      const double items_per_block = item_count / block_count;
-
-      return optimal_hash_count(64, items_per_block, Self::kLayoutFlat);
-    }
-
-    if (layout == Self::kLayoutBlocked512) {
-      const double block_count = std::floor(filter_size_in_bits / 512.0);
-      const double items_per_block = item_count / block_count;
-
-      return optimal_hash_count(512, items_per_block, Self::kLayoutFlat);
-    }
-
-    BATT_PANIC() << "Invalid layout: " << (i32)layout;
-    BATT_UNREACHABLE();
-  }
-
-  static PackedBloomFilter from_params(const BloomFilterParams& params, usize item_count,
-                                       u8 layout = PackedBloomFilter::kLayoutFlat)
-  {
-    PackedBloomFilter filter;
-    filter.initialize(params, item_count, layout);
-    return filter;
-  }
-    }
-#endif
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -624,6 +634,42 @@ struct PackedBloomFilter {
   }
 
   template <typename T>
+  bool query_blocked512_precached(BloomFilterQuery<T>& query) const noexcept
+  {
+    const usize block_i = this->block_index_from_hash(query.hash[0]);
+    const usize block_first_word_i = block_i * 8;
+
+    const i64* const block_p = (const i64*)&this->words[block_first_word_i];
+    const i64* const query_p = (const i64*)query.mask.data();
+
+#ifdef __AVX512F__
+
+    __m512i block_512 = {block_p[0], block_p[1], block_p[2], block_p[3],
+                         block_p[4], block_p[5], block_p[6], block_p[7]};
+
+    __m512i query_512 = {query_p[0], query_p[1], query_p[2], query_p[3],
+                         query_p[4], query_p[5], query_p[6], query_p[7]};
+
+    const bool match = _mm512_cmp_epi64_mask(_mm512_and_epi64(block_512, query_512), query_512,
+                                             _MM_CMPINT_EQ) == __mmask8{0b11111111};
+
+    return match;
+
+#else
+
+    return ((block_p[0] & query_p[0]) == query_p[0]) &&  //
+           ((block_p[1] & query_p[1]) == query_p[1]) &&  //;
+           ((block_p[2] & query_p[2]) == query_p[2]) &&  //;
+           ((block_p[3] & query_p[3]) == query_p[3]) &&  //;
+           ((block_p[4] & query_p[4]) == query_p[4]) &&  //;
+           ((block_p[5] & query_p[5]) == query_p[5]) &&  //;
+           ((block_p[6] & query_p[6]) == query_p[6]) &&  //;
+           ((block_p[7] & query_p[7]) == query_p[7]);
+
+#endif
+  }
+
+  template <typename T>
   bool query(BloomFilterQuery<T>& query) const noexcept
   {
     switch (this->layout()) {
@@ -747,6 +793,11 @@ struct PackedBloomFilter {
     return this->word_count_;
   }
 
+  const void* filter_data_end() const
+  {
+    return std::addressof(this->words[this->word_count()]);
+  }
+
   batt::Slice<const little_u64> get_words() const
   {
     return batt::as_slice(this->words, this->word_count());
@@ -814,18 +865,18 @@ void parallel_build_bloom_filter(batt::WorkerPool& worker_pool, Iter first, Iter
 
   const batt::TaskCount n_input_shards = stage1_plan.n_tasks;
 
+  using AlignedUnit = std::aligned_storage_t<64, 64>;
+
   const usize filter_size = packed_sizeof(*filter);
-  const usize filter_word_size = filter_size / 8;
+  const usize filter_unit_size = (filter_size + sizeof(AlignedUnit) - 1) / sizeof(AlignedUnit);
 
   BATT_CHECK_EQ(filter_size, sizeof(PackedBloomFilter) + filter->word_count() * sizeof(u64));
 
-  using AlignedUnit = std::aligned_storage_t<64, 64>;
-
-  std::unique_ptr<AlignedUnit[]> temp_memory{new AlignedUnit[filter_word_size * n_input_shards]};
+  std::unique_ptr<AlignedUnit[]> temp_memory{new AlignedUnit[filter_unit_size * n_input_shards]};
   batt::SmallVec<PackedBloomFilter*, 32> temp_filters;
   {
     AlignedUnit* ptr = temp_memory.get();
-    for (usize i = 0; i < n_input_shards; ++i, ptr += filter_word_size) {
+    for (usize i = 0; i < n_input_shards; ++i, ptr += filter_unit_size) {
       auto* partial = reinterpret_cast<PackedBloomFilter*>(ptr);
       *partial = *filter;
       temp_filters.emplace_back(partial);

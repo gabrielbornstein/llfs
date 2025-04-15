@@ -16,16 +16,16 @@
 namespace llfs {
 
 struct PageCacheMetrics {
-  CountMetric<int> get_count = 0;
-  CountMetric<int> get_page_view_count = 0;
-  CountMetric<int> get_read_count = 0;
-  CountMetric<u64> total_bytes_written = 0;
-  CountMetric<u64> total_bytes_read = 0;
-  CountMetric<u64> used_bytes_written = 0;
-  CountMetric<u64> node_write_count = 0;
-  CountMetric<u64> leaf_write_count = 0;
-  CountMetric<u64> total_write_ops = 0;
-  CountMetric<u64> total_read_ops = 0;
+  FastCountMetric<int> get_count{0};
+  CountMetric<int> get_page_view_count{0};
+  CountMetric<int> get_read_count{0};
+  CountMetric<u64> total_bytes_written{0};
+  CountMetric<u64> total_bytes_read{0};
+  CountMetric<u64> used_bytes_written{0};
+  CountMetric<u64> node_write_count{0};
+  CountMetric<u64> leaf_write_count{0};
+  CountMetric<u64> total_write_ops{0};
+  CountMetric<u64> total_read_ops{0};
   LatencyMetric allocate_page_alloc_latency;
   LatencyMetric allocate_page_insert_latency;
   LatencyMetric page_write_latency;

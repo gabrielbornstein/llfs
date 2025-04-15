@@ -100,23 +100,40 @@ TEST_F(PageCacheSlotTest, AddRemoveRefDeath)
   llfs::PageCacheSlot* slot = this->pool_->allocate();
 
   EXPECT_EQ(slot->ref_count(), 0u);
+
+#if LLFS_PAGE_CACHE_SLOT_ENABLE_ASSERTS
   EXPECT_DEATH(slot->remove_ref(), "Assert.*failed:.*observed_count.*>.*0");
+#endif
 
   slot->add_ref();
 
   EXPECT_EQ(slot->ref_count(), 1u);
+
+#if LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
   EXPECT_EQ(this->pool_->use_count(), 2u);
+#else
+  EXPECT_EQ(this->pool_->use_count(), 1u);
+#endif
 
   slot->add_ref();
   slot->add_ref();
 
   EXPECT_EQ(slot->ref_count(), 3u);
+#if LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
   EXPECT_EQ(this->pool_->use_count(), 2u);
+#else
+  EXPECT_EQ(this->pool_->use_count(), 1u);
+#endif
 
   slot->remove_ref();
 
   EXPECT_EQ(slot->ref_count(), 2u);
+
+#if LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
   EXPECT_EQ(this->pool_->use_count(), 2u);
+#else
+  EXPECT_EQ(this->pool_->use_count(), 1u);
+#endif
 
   slot->remove_ref();
   slot->remove_ref();
@@ -327,9 +344,11 @@ TEST_F(PageCacheSlotTest, ExtendPinSuccess)
 //
 TEST_F(PageCacheSlotTest, ExtendPinDeath)
 {
+#if LLFS_PAGE_CACHE_SLOT_ENABLE_ASSERTS
   llfs::PageCacheSlot* slot = this->pool_->allocate();
 
   EXPECT_DEATH(slot->extend_pin(), "Assert.*failed:.*is.*pinned");
+#endif
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -491,7 +510,7 @@ TEST_F(PageCacheSlotTest, RefCounting)
 
   start.store(true);
 
-  for (std::thread &t : threads) {
+  for (std::thread& t : threads) {
     t.join();
   }
 

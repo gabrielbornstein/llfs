@@ -36,9 +36,9 @@ struct PageIdSlot {
   using Self = PageIdSlot;
 
   struct Metrics {
-    CountMetric<usize> load_total_count;
-    CountMetric<usize> load_slot_hit_count;
-    CountMetric<usize> load_slot_miss_count;
+    FastCountMetric<usize> load_total_count;
+    FastCountMetric<usize> load_slot_hit_count;
+    FastCountMetric<usize> load_slot_miss_count;
   };
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -

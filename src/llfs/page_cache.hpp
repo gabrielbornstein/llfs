@@ -139,9 +139,7 @@ class PageCache : public PageLoader
 
   const PageCacheOptions& options() const;
 
-  Status set_filter_builder(batt::TaskScheduler& task_scheduler, PageSize src_page_size,
-                            PageSize filter_page_size,
-                            std::unique_ptr<PageFilterBuilder>&& filter_builder) noexcept;
+  Status assign_filter_device(PageSize src_page_size, PageSize filter_page_size) noexcept;
 
   Optional<PageId> filter_page_id_for(PageId page_id) const;
 
@@ -249,6 +247,13 @@ class PageCache : public PageLoader
     return this->cache_slot_pool_by_page_size_log2_[page_size_log2]->metrics();
   }
 
+  /** \brief Returns the PageDeviceEntry for the device that owns the given page.
+   *
+   * If the specified device (in the most-significant bits of `page_id`) isn't known by this
+   * PageCache, returns nullptr.
+   */
+  PageDeviceEntry* get_device_for_page(PageId page_id);
+
  private:
   //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 
@@ -261,14 +266,6 @@ class PageCache : public PageLoader
                      const PageCacheOptions& options) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
-
-  //----- --- -- -  -  -   -
-  /** \brief Returns the PageDeviceEntry for the device that owns the given page.
-   *
-   * If the specified device (in the most-significant bits of `page_id`) isn't known by this
-   * PageCache, returns nullptr.
-   */
-  PageDeviceEntry* get_device_for_page(PageId page_id);
 
   //----- --- -- -  -  -   -
   /** \brief Attempts to find the specified page (`page_id`) in the cache; if successful, the cache
@@ -337,26 +334,24 @@ class PageCache : public PageLoader
   //
   std::shared_ptr<batt::Mutex<PageLayoutReaderMap>> page_readers_;
 
-  //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-  // TODO [tastolfi 2021-09-08] We need something akin to the PageRecycler/PageAllocator to durably
-  // store page filters so we can cache those and do fast exclusion tests.  This may belong at a
-  // higher level, however...
-  //
-  //  bool update_page_filter(std::shared_ptr<PageFilter>&& new_filter);
-  //  void build_page_filter(PinnedPage&& page);
-  //  Slice<Mutex<std::shared_ptr<PageFilter>>> leaf_page_filters();
-  //  void page_filter_builder_task_main();
-  //
-  //  Queue<PinnedPage<>> page_filter_build_queue_;
-  //  Task page_filter_builder_;
-  //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-
   std::array<NewPageTracker, 16384> history_;
   std::atomic<isize> history_end_{0};
 
 };  // class PageCache
 
 //=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+BATT_ALWAYS_INLINE inline PageDeviceEntry* PageCache::get_device_for_page(PageId page_id)
+{
+  const page_device_id_int device_id = PageIdFactory::get_device_id(page_id);
+  if (BATT_HINT_FALSE(device_id >= this->page_devices_.size())) {
+    return nullptr;
+  }
+
+  return this->page_devices_[device_id].get();
+}
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
@@ -368,11 +363,11 @@ BATT_ALWAYS_INLINE inline Optional<PageId> PageCache::filter_page_id_for(PageId 
   }
 
   PageDeviceEntry& src_entry = *this->page_devices_[device_id];
-  if (!src_entry.filter_builder_task) {
+  if (!src_entry.filter_device_entry) {
     return None;
   }
 
-  return src_entry.filter_builder_task->filter_page_id_for(src_page_id);
+  return PageIdFactory::change_device_id(src_page_id, src_entry.filter_device_id);
 }
 
 }  // namespace llfs

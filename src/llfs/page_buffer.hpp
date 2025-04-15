@@ -10,6 +10,8 @@
 #ifndef LLFS_PAGE_BUFFER_HPP
 #define LLFS_PAGE_BUFFER_HPP
 
+#include <llfs/config.hpp>
+//
 #include <llfs/buffer.hpp>
 #include <llfs/int_types.hpp>
 #include <llfs/page_id.hpp>
@@ -28,7 +30,7 @@ namespace llfs {
 class PageBuffer
 {
  public:
-  using Block = std::aligned_storage_t<4096, 512>;
+  using Block = std::aligned_storage_t<kDirectIOBlockSize, kDirectIOBlockAlign>;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 

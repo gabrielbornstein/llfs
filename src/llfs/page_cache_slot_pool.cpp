@@ -105,7 +105,7 @@ PageCacheSlot* PageCacheSlot::Pool::allocate() noexcept
   if (this->n_allocated_.load() < this->n_slots_) {
     const usize allocated_i = this->n_allocated_.fetch_add(1);
     if (allocated_i < this->n_slots_) {
-      this->metrics_.alloc_count.fetch_add(1);
+      this->metrics_.alloc_count.add(1);
       void* storage_addr = this->slots() + allocated_i;
       PageCacheSlot* const new_slot = new (storage_addr) PageCacheSlot{*this};
       this->n_constructed_.fetch_add(1);
@@ -204,7 +204,7 @@ PageCacheSlot* PageCacheSlot::Pool::evict_lru()
     // Fingers crossed!
     //
     if (lru_slot->evict()) {
-      this->metrics_.evict_count.fetch_add(1);
+      this->metrics_.evict_count.add(1);
       return lru_slot;
     }
   }

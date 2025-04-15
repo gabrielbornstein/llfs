@@ -13,14 +13,6 @@ namespace llfs {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-/*static*/ PageLayoutId BloomFilterPageView::page_layout_id()
-{
-  static const PageLayoutId id = PageLayoutId::from_str("bloomflt");
-  return id;
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
 /*static*/ PageReader BloomFilterPageView::page_reader()
 {
   return [](std::shared_ptr<const PageBuffer> page_buffer)
@@ -33,7 +25,7 @@ namespace llfs {
 //
 /*static*/ batt::Status BloomFilterPageView::register_layout(PageCache& cache)
 {
-  return cache.register_page_reader(BloomFilterPageView::page_layout_id(), __FILE__, __LINE__,
+  return cache.register_page_reader(PackedBloomFilterPage::page_layout_id(), __FILE__, __LINE__,
                                     BloomFilterPageView::page_reader());
 }
 

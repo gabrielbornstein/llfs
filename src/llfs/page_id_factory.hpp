@@ -65,6 +65,13 @@ class PageIdFactory : public boost::equality_comparable<PageIdFactory>
     return (id.int_value() & kPageDeviceIdMask) >> kPageDeviceIdShift;
   }
 
+  BATT_ALWAYS_INLINE static PageId change_device_id(PageId src_page_id,
+                                                    page_device_id_int new_device_id)
+  {
+    return PageId{(src_page_id.int_value() & ~kPageDeviceIdMask) |
+                  (new_device_id << kPageDeviceIdShift)};
+  }
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   explicit PageIdFactory(PageCount device_capacity, page_device_id_int page_device_id) noexcept
@@ -123,6 +130,13 @@ class PageIdFactory : public boost::equality_comparable<PageIdFactory>
   {
     const auto delta = second_gen - first_gen;
     return delta != 0 && delta < this->max_generation_count() / 2;
+  }
+
+  bool is_same_physical_page(PageId left, PageId right) const
+  {
+    return PageIdFactory::get_device_id(left) == this->get_device_id() &&
+           PageIdFactory::get_device_id(left) == PageIdFactory::get_device_id(right) &&
+           this->get_physical_page(left) == this->get_physical_page(right);
   }
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

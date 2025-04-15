@@ -11,6 +11,8 @@
 
 #include <llfs/optional.hpp>
 
+#include <batteries/env.hpp>
+
 namespace llfs {
 
 namespace {
@@ -20,7 +22,6 @@ namespace {
 struct NewSlot {
   PageCacheSlot* p_slot = nullptr;
   PageCacheSlot::PinnedRef pinned_ref;
-  usize slot_index = PageDeviceCache::kInvalidIndex;
 };
 
 }  //namespace
@@ -31,7 +32,7 @@ struct NewSlot {
     const PageIdFactory& page_ids, boost::intrusive_ptr<PageCacheSlot::Pool>&& slot_pool) noexcept
     : page_ids_{page_ids}
     , slot_pool_{std::move(slot_pool)}
-    , cache_(this->page_ids_.get_physical_page_count(), kInvalidIndex)
+    , cache_(this->page_ids_.get_physical_page_count(), nullptr)
 {
 }
 
@@ -51,15 +52,18 @@ const PageIdFactory& PageDeviceCache::page_ids() const noexcept
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 batt::StatusOr<PageCacheSlot::PinnedRef> PageDeviceCache::find_or_insert(
-    PageId key, const std::function<void(const PageCacheSlot::PinnedRef&)>& initialize)
+    PageId key, const batt::SmallFn<void(const PageCacheSlot::PinnedRef&)>& initialize)
 {
-  BATT_CHECK_EQ(PageIdFactory::get_device_id(key), this->page_ids_.get_device_id());
-  this->metrics().query_count.fetch_add(1);
+  static const bool kEvictOldGenSlot =
+      batt::getenv_as<bool>("LLFS_EVICT_OLD_GEN_SLOT").value_or(false);
+
+  LLFS_PAGE_CACHE_ASSERT_EQ(PageIdFactory::get_device_id(key), this->page_ids_.get_device_id());
+  this->metrics().query_count.add(1);
 
   // Lookup the cache table entry for the given page id.
   //
   const i64 physical_page = this->page_ids_.get_physical_page(key);
-  std::atomic<usize>& slot_index_ref = this->get_slot_index_ref(physical_page);
+  std::atomic<PageCacheSlot*>& slot_ptr_ref = this->get_slot_ptr_ref(physical_page);
 
   // Initialized lazily (at most once) below, only when we discover we might
   // need them.
@@ -68,28 +72,28 @@ batt::StatusOr<PageCacheSlot::PinnedRef> PageDeviceCache::find_or_insert(
 
   // Let's take a look at what's there now...
   //
-  usize observed_slot_index = slot_index_ref.load();
+  PageCacheSlot* observed_slot_ptr = slot_ptr_ref.load();
 
   for (;;) {
     // If the current index is invalid, then there's no point trying to pin it, so check that
     // first.
     //
-    if (observed_slot_index != kInvalidIndex) {
+    if (observed_slot_ptr != nullptr) {
       // If the CAS at the end of this loop failed spuriously, we might end up here...
       //
-      if (new_slot && observed_slot_index == new_slot->slot_index) {
+      if (new_slot && observed_slot_ptr == new_slot->p_slot) {
         break;
       }
 
       // Looks like there is already a slot for this physical page... let's try to pin it to see
       // if it still contains the desired page.
       //
-      PageCacheSlot* slot = this->slot_pool_->get_slot(observed_slot_index);
+      PageCacheSlot* slot = observed_slot_ptr;
       PageCacheSlot::PinnedRef pinned = slot->acquire_pin(key);
       if (pinned) {
         if (new_slot) {
-          BATT_CHECK(new_slot->pinned_ref);
-          BATT_CHECK_NE(slot->value(), new_slot->pinned_ref.value());
+          LLFS_PAGE_CACHE_ASSERT(new_slot->pinned_ref);
+          LLFS_PAGE_CACHE_ASSERT_NE(slot->value(), new_slot->pinned_ref.value());
 
           // [tastolfi 2024-02-09] I can't think of a reason why the new_value would ever be visible
           // to anyone if we go down this code path, but just in case, resolve the Latch with a
@@ -105,10 +109,35 @@ batt::StatusOr<PageCacheSlot::PinnedRef> PageDeviceCache::find_or_insert(
 
         // Done! (Found existing value)
         //
-        this->metrics().hit_count.fetch_add(1);
+        this->metrics().hit_count.add(1);
         return {std::move(pinned)};
+
+      } else if (kEvictOldGenSlot) {
+        // Before we go to the trouble of allocating a new slot (or evicting the contents of an
+        // existing one), check to see whether this slot contains an older generation of the same
+        // PageId; if so, then we should evict *this* slot.
+        //
+        pinned = slot->acquire_pin(key, /*ignore_key=*/true);
+        if (pinned) {
+          const PageId old_page_id = pinned.key();
+          if (this->page_ids_.is_same_physical_page(old_page_id, key)) {
+            pinned.reset();
+
+            // Yes, it is an old generation of the same page!  Attempt to evict and reuse this slot.
+            //
+            if (slot->evict_if_key_equals(old_page_id)) {
+              this->metrics().evict_prior_generation_count.add(1);
+              new_slot.emplace();
+              new_slot->p_slot = slot;
+              new_slot->pinned_ref = slot->fill(key);
+
+              LLFS_PAGE_CACHE_ASSERT_EQ(new_slot->p_slot, observed_slot_ptr);
+              break;
+            }
+          }
+        }
       }
-      this->metrics().stale_count.fetch_add(1);
+      this->metrics().stale_count.add(1);
     }
 
     // No existing value found, or pin failed; allocate a new slot, fill it, and attempt to CAS it
@@ -118,26 +147,22 @@ batt::StatusOr<PageCacheSlot::PinnedRef> PageDeviceCache::find_or_insert(
       new_slot.emplace();
       new_slot->p_slot = this->slot_pool_->allocate();
       if (!new_slot->p_slot) {
-        this->metrics().full_count.fetch_add(1);
+        this->metrics().full_count.add(1);
         return ::llfs::make_status(StatusCode::kCacheSlotsFull);
       }
-      BATT_CHECK(!new_slot->p_slot->is_valid());
+      LLFS_PAGE_CACHE_ASSERT(!new_slot->p_slot->is_valid());
 
       new_slot->pinned_ref = new_slot->p_slot->fill(key);
-      new_slot->slot_index = new_slot->p_slot->index();
-
-      BATT_CHECK_EQ(new_slot->p_slot, this->slot_pool_->get_slot(new_slot->slot_index));
     }
-    BATT_CHECK_NE(new_slot->slot_index, kInvalidIndex);
 
     // If we can atomically overwrite the slot index value we saw above (CAS), then we are done!
     //
-    if (slot_index_ref.compare_exchange_weak(observed_slot_index, new_slot->slot_index)) {
+    if (slot_ptr_ref.compare_exchange_weak(observed_slot_ptr, new_slot->p_slot)) {
       break;
     }
   }
 
-  BATT_CHECK(new_slot);
+  LLFS_PAGE_CACHE_ASSERT(new_slot);
 
   // We purposely delayed this step until we knew that this thread must initialize the cache
   // slot's Latch.  This function will probably start I/O (or do something else in a test case...)
@@ -146,7 +171,7 @@ batt::StatusOr<PageCacheSlot::PinnedRef> PageDeviceCache::find_or_insert(
 
   // Done! (Admitted new value)
   //
-  this->metrics().admit_count.fetch_add(1);
+  this->metrics().admit_count.add(1);
   return {std::move(new_slot->pinned_ref)};
 }
 
@@ -159,28 +184,28 @@ void PageDeviceCache::erase(PageId key)
   // Lookup the cache table entry for the given page id.
   //
   const i64 physical_page = this->page_ids_.get_physical_page(key);
-  std::atomic<usize>& slot_index_ref = this->get_slot_index_ref(physical_page);
+  std::atomic<PageCacheSlot*>& slot_ptr_ref = this->get_slot_ptr_ref(physical_page);
 
-  usize slot_index = slot_index_ref.load();
-  if (slot_index == kInvalidIndex) {
+  PageCacheSlot* slot_ptr = slot_ptr_ref.load();
+  if (slot_ptr == nullptr) {
     return;
   }
 
   // Helper function.
   //
   const auto invalidate_ref = [&] {
-    const usize slot_index_to_erase = slot_index;
+    const PageCacheSlot* slot_ptr_to_erase = slot_ptr;
     do {
-      if (slot_index_ref.compare_exchange_weak(slot_index, kInvalidIndex)) {
+      if (slot_ptr_ref.compare_exchange_weak(slot_ptr, nullptr)) {
         break;
       }
-    } while (slot_index == slot_index_to_erase);
-    this->metrics().erase_count.fetch_add(1);
+    } while (slot_ptr == slot_ptr_to_erase);
+    this->metrics().erase_count.add(1);
   };
 
   // If the slot is still holding the passed id, then clear it out.
   //
-  PageCacheSlot* slot = this->slot_pool_->get_slot(slot_index);
+  PageCacheSlot* slot = slot_ptr;
   if (slot->evict_if_key_equals(key)) {
     invalidate_ref();
 
@@ -211,18 +236,6 @@ void PageDeviceCache::erase(PageId key)
       }
     }
   }
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-std::atomic<usize>& PageDeviceCache::get_slot_index_ref(i64 physical_page)
-{
-  static_assert(sizeof(std::atomic<usize>) == sizeof(usize));
-  static_assert(alignof(std::atomic<usize>) == alignof(usize));
-
-  BATT_CHECK_LT((usize)physical_page, this->cache_.size());
-
-  return reinterpret_cast<std::atomic<usize>&>(this->cache_[physical_page]);
 }
 
 }  //namespace llfs

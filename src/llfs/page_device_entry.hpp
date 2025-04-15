@@ -13,7 +13,6 @@
 #include <llfs/no_outgoing_refs_cache.hpp>
 #include <llfs/page_arena.hpp>
 #include <llfs/page_device_cache.hpp>
-#include <llfs/page_filter_builder_task.hpp>
 
 namespace llfs {
 
@@ -36,15 +35,6 @@ struct PageDeviceEntry {
    */
   bool can_alloc = true;
 
-  /** \brief If this device is being used as filter page storage for some _other_ device, this
-   * points at the builder task for that device's entry.
-   */
-  PageFilterBuilderTask* owning_filter_builder = nullptr;
-
-  /** \brief The task building filters for pages on this device.
-   */
-  std::unique_ptr<PageFilterBuilderTask> filter_builder_task;
-
   /** \brief A per-device page cache; shares a PageCacheSlot::Pool with all other PageDeviceEntry
    * objects that have the same page size.
    */
@@ -54,7 +44,16 @@ struct PageDeviceEntry {
    * device.
    */
   NoOutgoingRefsCache no_outgoing_refs_cache;
+
+  PageDeviceEntry* is_filter_device_for = nullptr;
+
+  page_device_id_int is_filter_device_for_id = 0;
+
+  PageDeviceEntry* filter_device_entry = nullptr;
+
+  page_device_id_int filter_device_id = 0;
 };
+
 }  // namespace llfs
 
 #endif  // LLFS_PAGE_DEVICE_ENTRY_HPP

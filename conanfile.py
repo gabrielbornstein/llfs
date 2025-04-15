@@ -54,12 +54,14 @@ class LlfsConan(ConanFile):
     exports_sources = [
         "src/CMakeLists.txt",
         "src/**/*.hpp",
+        "src/**/*.h",
         "src/**/*.ipp",
         "src/**/*.cpp",
     ]
 
     tool_requires = [
         "cmake/[>=3.20.0]",
+        "ninja/1.12.1",
     ]
 
     #+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -79,7 +81,7 @@ class LlfsConan(ConanFile):
         self.requires("glog/0.7.1", **VISIBLE, **OVERRIDE)
         self.requires("libbacktrace/cci.20210118", **VISIBLE)
         self.requires("openssl/3.3.2", **VISIBLE, **OVERRIDE)
-        self.requires("xxhash/0.8.2", **VISIBLE)
+        self.requires("xxhash/0.8.3", **VISIBLE)
 
         self.requires("zlib/1.3", **OVERRIDE)
 

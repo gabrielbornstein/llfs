@@ -101,11 +101,6 @@ namespace {
 
 const double ln2 = std::log(2);
 
-HashCount hash_count_from_bits_per_key(RealBitCount bits_per_key) noexcept
-{
-  return HashCount{(usize)std::ceil(bits_per_key * ln2)};
-}
-
 RealBitCount bits_per_key_from_hash_count(HashCount hash_count) noexcept
 {
   return RealBitCount{(double)hash_count.value() / ln2};

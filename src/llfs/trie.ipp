@@ -66,6 +66,9 @@ inline BPTrieNode* make_trie(const Range& keys, BPTrieNodeSet& node_set, usize c
 
     node->prefix_ = std::string_view{first->data() + current_prefix_len,  //
                                      first->size() - current_prefix_len};
+
+    node->subtree_node_count_ = 1;
+
     return node;
   }
 
@@ -133,6 +136,10 @@ inline BPTrieNode* make_trie(const Range& keys, BPTrieNodeSet& node_set, usize c
 
   node->right_ =
       make_trie(boost::make_iterator_range(pivot_iter, last), node_set, current_prefix_len, true);
+
+  node->subtree_node_count_ = 1 +  //
+                              ((node->left_) ? node->left_->subtree_node_count_ : 0) +
+                              ((node->right_) ? node->right_->subtree_node_count_ : 0);
 
   return node;
 }

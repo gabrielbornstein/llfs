@@ -1504,7 +1504,7 @@ TEST_F(VolumeSimTest, ConcurrentAppendJobs)
     // Add three page devices so we can verify that the ref counts are correctly recovered from
     // a subset.
     //
-    sim.add_page_arena(this->pages_per_device, llfs::PageSize{1 * kKiB});
+    sim.add_page_arena(this->pages_per_device, llfs::PageSize{4 * kKiB});
 
     sim.register_page_reader(llfs::PageGraphNodeView::page_layout_id(), __FILE__, __LINE__,
                              llfs::PageGraphNodeView::page_reader());
@@ -1550,7 +1550,7 @@ TEST_F(VolumeSimTest, ConcurrentAppendJobs)
                 //
                 llfs::PageId page_id =
                     BATT_OK_RESULT_OR_PANIC(VolumeSimTest::build_page_with_refs_to(
-                        /*refs=*/{}, llfs::PageSize{1 * kKiB}, *job, sim));
+                        /*refs=*/{}, llfs::PageSize{4 * kKiB}, *job, sim));
 
                 page_ids[task_i] = page_id;
 
@@ -1599,7 +1599,7 @@ TEST_F(VolumeSimTest, ConcurrentAppendJobs)
 
         LLFS_VLOG(1) << "checking ref counts...";
 
-        for (llfs::PageDeviceEntry* entry : sim.cache()->devices_with_page_size(1 * kKiB)) {
+        for (llfs::PageDeviceEntry* entry : sim.cache()->devices_with_page_size(4 * kKiB)) {
           BATT_CHECK_NOT_NULLPTR(entry);
           for (llfs::PageId page_id : page_ids) {
             EXPECT_EQ(entry->arena.allocator().get_ref_count(page_id).first, kExpectedRefCount);
@@ -1663,9 +1663,9 @@ void VolumeSimTest::run_recovery_sim(u32 seed)
   // Add three page devices so we can verify that the ref counts are correctly recovered from
   // a subset.
   //
-  sim.add_page_arena(this->pages_per_device, llfs::PageSize{1 * kKiB});
-  sim.add_page_arena(this->pages_per_device, llfs::PageSize{2 * kKiB});
   sim.add_page_arena(this->pages_per_device, llfs::PageSize{4 * kKiB});
+  sim.add_page_arena(this->pages_per_device, llfs::PageSize{8 * kKiB});
+  sim.add_page_arena(this->pages_per_device, llfs::PageSize{16 * kKiB});
 
   sim.register_page_reader(llfs::PageGraphNodeView::page_layout_id(), __FILE__, __LINE__,
                            llfs::PageGraphNodeView::page_reader());
@@ -1751,7 +1751,7 @@ void VolumeSimTest::commit_first_job(RecoverySimState& state, llfs::StorageSimul
   ASSERT_NE(job, nullptr);
 
   batt::StatusOr<llfs::PageId> new_page_id =
-      this->build_page_with_refs_to({}, llfs::PageSize{1 * kKiB}, *job, sim);
+      this->build_page_with_refs_to({}, llfs::PageSize{4 * kKiB}, *job, sim);
 
   ASSERT_TRUE(new_page_id.ok()) << BATT_INSPECT(new_page_id.status());
 
@@ -1784,14 +1784,14 @@ batt::Status VolumeSimTest::commit_second_job_pre_crash(RecoverySimState& state,
   //
   BATT_ASSIGN_OK_RESULT(
       state.third_page_id,
-      this->build_page_with_refs_to({state.first_page_id}, llfs::PageSize{4 * kKiB}, *job, sim));
+      this->build_page_with_refs_to({state.first_page_id}, llfs::PageSize{16 * kKiB}, *job, sim));
 
   //----- --- -- -  -  -   -
   // Build the 2k page; this will be referenced from the log.
   //
   BATT_ASSIGN_OK_RESULT(
       state.second_root_page_id,
-      this->build_page_with_refs_to({state.third_page_id}, llfs::PageSize{2 * kKiB}, *job, sim));
+      this->build_page_with_refs_to({state.third_page_id}, llfs::PageSize{8 * kKiB}, *job, sim));
 
   //----- --- -- -  -  -   -
 
@@ -1887,21 +1887,21 @@ void VolumeSimTest::verify_post_recovery_expectations(RecoverySimState& state,
     if (state.recovered_second_page) {
       EXPECT_FALSE(state.second_job_will_not_commit);
 
-      for (llfs::PageDeviceEntry* entry : sim.cache()->devices_with_page_size(1 * kKiB)) {
+      for (llfs::PageDeviceEntry* entry : sim.cache()->devices_with_page_size(4 * kKiB)) {
         BATT_CHECK_NOT_NULLPTR(entry);
         EXPECT_EQ(entry->arena.allocator().free_pool_size(), this->pages_per_device - 1);
         EXPECT_EQ(entry->arena.allocator().get_ref_count(state.first_page_id).first, 3);
         ASSERT_TRUE(sim.has_data_for_page_id(state.first_page_id).ok());
         EXPECT_TRUE(*sim.has_data_for_page_id(state.first_page_id));
       }
-      for (llfs::PageDeviceEntry* entry : sim.cache()->devices_with_page_size(2 * kKiB)) {
+      for (llfs::PageDeviceEntry* entry : sim.cache()->devices_with_page_size(8 * kKiB)) {
         BATT_CHECK_NOT_NULLPTR(entry);
         EXPECT_EQ(entry->arena.allocator().free_pool_size(), this->pages_per_device - 1);
         EXPECT_EQ(entry->arena.allocator().get_ref_count(state.second_root_page_id).first, 2);
         ASSERT_TRUE(sim.has_data_for_page_id(state.second_root_page_id).ok());
         EXPECT_TRUE(*sim.has_data_for_page_id(state.second_root_page_id));
       }
-      for (llfs::PageDeviceEntry* entry : sim.cache()->devices_with_page_size(4 * kKiB)) {
+      for (llfs::PageDeviceEntry* entry : sim.cache()->devices_with_page_size(16 * kKiB)) {
         BATT_CHECK_NOT_NULLPTR(entry);
         EXPECT_EQ(entry->arena.allocator().free_pool_size(), this->pages_per_device - 1);
         EXPECT_EQ(entry->arena.allocator().get_ref_count(state.third_page_id).first, 2);
@@ -1909,14 +1909,14 @@ void VolumeSimTest::verify_post_recovery_expectations(RecoverySimState& state,
         EXPECT_TRUE(*sim.has_data_for_page_id(state.third_page_id));
       }
     } else {
-      for (llfs::PageDeviceEntry* entry : sim.cache()->devices_with_page_size(1 * kKiB)) {
+      for (llfs::PageDeviceEntry* entry : sim.cache()->devices_with_page_size(4 * kKiB)) {
         BATT_CHECK_NOT_NULLPTR(entry);
         EXPECT_EQ(entry->arena.allocator().free_pool_size(), this->pages_per_device - 1);
         EXPECT_EQ(entry->arena.allocator().get_ref_count(state.first_page_id).first, 2);
         ASSERT_TRUE(sim.has_data_for_page_id(state.first_page_id).ok());
         EXPECT_TRUE(*sim.has_data_for_page_id(state.first_page_id));
       }
-      for (llfs::PageDeviceEntry* entry : sim.cache()->devices_with_page_size(2 * kKiB)) {
+      for (llfs::PageDeviceEntry* entry : sim.cache()->devices_with_page_size(8 * kKiB)) {
         BATT_CHECK_NOT_NULLPTR(entry);
         EXPECT_EQ(entry->arena.allocator().free_pool_size(), this->pages_per_device);
         if (state.second_root_page_id.is_valid()) {
@@ -1927,7 +1927,7 @@ void VolumeSimTest::verify_post_recovery_expectations(RecoverySimState& state,
           }
         }
       }
-      for (llfs::PageDeviceEntry* entry : sim.cache()->devices_with_page_size(4 * kKiB)) {
+      for (llfs::PageDeviceEntry* entry : sim.cache()->devices_with_page_size(16 * kKiB)) {
         BATT_CHECK_NOT_NULLPTR(entry);
         EXPECT_EQ(entry->arena.allocator().free_pool_size(), this->pages_per_device);
         if (state.third_page_id.is_valid()) {

@@ -66,7 +66,8 @@ void IoRingPageFileDevice::write(std::shared_ptr<const PageBuffer>&& page_buffer
     ConstBuffer buffer = page_buffer->const_buffer();
     if (page_header.unused_end == page_header.size &&
         page_header.unused_begin < page_header.unused_end) {
-      buffer = resize_buffer(buffer, batt::round_up_bits(9, page_header.unused_begin.value()));
+      buffer = resize_buffer(
+          buffer, batt::round_up_bits(kDirectIOBlockSizeLog2, page_header.unused_begin.value()));
 
       BATT_CHECK_GE(page_header.unused_begin.value(), sizeof(PackedPageHeader));
       BATT_CHECK_LE(buffer.size(), page_buffer->size());
