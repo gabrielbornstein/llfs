@@ -10,16 +10,114 @@
 #ifndef LLFS_PAGE_LOADER_HPP
 #define LLFS_PAGE_LOADER_HPP
 
+#include <llfs/config.hpp>
+//
 #include <llfs/api_types.hpp>
 #include <llfs/int_types.hpp>
 #include <llfs/optional.hpp>
 #include <llfs/page_id.hpp>
-#include <llfs/page_id_slot.hpp>
 #include <llfs/page_layout_id.hpp>
 #include <llfs/page_loader_decl.hpp>
+#include <llfs/pin_page_to_job.hpp>
 #include <llfs/status.hpp>
 
+#include <batteries/type_traits.hpp>
+#include <batteries/typed_args.hpp>
+
 namespace llfs {
+
+class PageCache;
+
+struct PageLoadOptions {
+  using Self = PageLoadOptions;
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  Optional<PageLayoutId> required_layout_ = None;
+  PinPageToJob pin_page_to_job_ = PinPageToJob::kDefault;
+  OkIfNotFound ok_if_not_found_ = OkIfNotFound{false};
+  LruPriority lru_priority_ = LruPriority{1};
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  PageLoadOptions() = default;
+  PageLoadOptions(const PageLoadOptions&) = default;
+  PageLoadOptions& operator=(const PageLoadOptions&) = default;
+
+  template <typename... Args, typename = batt::EnableIfNoShadow<Self, Args...>>
+  explicit PageLoadOptions(Args&&... args) noexcept
+      : required_layout_{batt::get_typed_arg<Optional<PageLayoutId>>(None, args...)}
+      , pin_page_to_job_{batt::get_typed_arg<PinPageToJob>(PinPageToJob::kDefault, args...)}
+      , ok_if_not_found_{batt::get_typed_arg<OkIfNotFound>(OkIfNotFound{false}, args...)}
+      , lru_priority_{batt::get_typed_arg<LruPriority>(LruPriority{1}, args...)}
+  {
+  }
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  Self clone() const
+  {
+    return *this;
+  }
+
+  //----- --- -- -  -  -   -
+
+  Self& required_layout(const Optional<PageLayoutId>& value)
+  {
+    this->required_layout_ = value;
+    return *this;
+  }
+
+  const Optional<PageLayoutId>& required_layout() const
+  {
+    return this->required_layout_;
+  }
+
+  //----- --- -- -  -  -   -
+
+  Self& pin_page_to_job(PinPageToJob value)
+  {
+    this->pin_page_to_job_ = value;
+    return *this;
+  }
+
+  Self& pin_page_to_job(bool value)
+  {
+    this->pin_page_to_job_ = value ? PinPageToJob::kTrue : PinPageToJob::kFalse;
+    return *this;
+  }
+
+  PinPageToJob pin_page_to_job() const
+  {
+    return this->pin_page_to_job_;
+  }
+
+  //----- --- -- -  -  -   -
+
+  Self& ok_if_not_found(bool value)
+  {
+    this->ok_if_not_found_ = OkIfNotFound{value};
+    return *this;
+  }
+
+  OkIfNotFound ok_if_not_found() const
+  {
+    return this->ok_if_not_found_;
+  }
+
+  //----- --- -- -  -  -   -
+
+  Self& lru_priority(i64 value)
+  {
+    this->lru_priority_ = LruPriority{value};
+    return *this;
+  }
+
+  LruPriority lru_priority() const
+  {
+    return this->lru_priority_;
+  }
+};
 
 // Interface for an entity which can resolve `PageId`s into `PinnedPage`s.
 //
@@ -36,88 +134,14 @@ class BasicPageLoader
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  virtual PageCache* page_cache() const = 0;
+
   virtual void prefetch_hint(PageId page_id) = 0;
 
-  virtual StatusOr<PinnedPageT> get_page_with_layout_in_job(
-      PageId page_id, const Optional<PageLayoutId>& required_layout, PinPageToJob pin_page_to_job,
-      OkIfNotFound ok_if_not_found) = 0;
+  virtual StatusOr<PinnedPageT> try_pin_cached_page(PageId page_id,
+                                                    const PageLoadOptions& options) = 0;
 
-  //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-  //
-  virtual StatusOr<PinnedPageT> get_page_slot_with_layout_in_job(
-      const PageIdSlot& page_id_slot, const Optional<PageLayoutId>& required_layout,
-      PinPageToJob pin_page_to_job, OkIfNotFound ok_if_not_found)
-  {
-    return page_id_slot.load_through(*this, required_layout, pin_page_to_job, ok_if_not_found);
-  }
-
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-  //
-  virtual StatusOr<PinnedPageT> get_page_slot_with_layout(
-      const PageIdSlot& page_id_slot, const Optional<PageLayoutId>& required_layout,
-      OkIfNotFound ok_if_not_found)
-  {
-    return this->get_page_slot_with_layout_in_job(page_id_slot, required_layout,
-                                                  PinPageToJob::kDefault, ok_if_not_found);
-  }
-
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-  //
-  virtual StatusOr<PinnedPageT> get_page_slot_in_job(const PageIdSlot& page_id_slot,
-                                                     PinPageToJob pin_page_to_job,
-                                                     OkIfNotFound ok_if_not_found)
-  {
-    return this->get_page_slot_with_layout_in_job(page_id_slot, /*required_layout=*/None,
-                                                  pin_page_to_job, ok_if_not_found);
-  }
-
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-  //
-  virtual StatusOr<PinnedPageT> get_page_slot(const PageIdSlot& page_id_slot,
-                                              OkIfNotFound ok_if_not_found)
-  {
-    return this->get_page_slot_with_layout_in_job(page_id_slot, /*required_layout=*/None,
-                                                  PinPageToJob::kDefault, ok_if_not_found);
-  }
-
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-  //
-  virtual StatusOr<PinnedPageT> get_page_with_layout(PageId page_id,
-                                                     const Optional<PageLayoutId>& required_layout,
-                                                     OkIfNotFound ok_if_not_found)
-  {
-    return this->get_page_with_layout_in_job(page_id, required_layout, PinPageToJob::kDefault,
-                                             ok_if_not_found);
-  }
-
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-  //
-  virtual StatusOr<PinnedPageT> get_page_in_job(PageId page_id, PinPageToJob pin_page_to_job,
-                                                OkIfNotFound ok_if_not_found)
-  {
-    return this->get_page_with_layout_in_job(page_id, /*required_layout=*/None, pin_page_to_job,
-                                             ok_if_not_found);
-  }
-
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-  //
-  virtual StatusOr<PinnedPageT> get_page(PageId page_id, OkIfNotFound ok_if_not_found)
-  {
-    return this->get_page_with_layout(page_id, /*required_layout=*/None, ok_if_not_found);
-  }
-
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-  //
-  virtual StatusOr<PinnedPageT> get_page_slot_ref_with_layout_in_job(
-      PageId page_id, PageCacheSlot::AtomicRef& slot_ref,
-      const Optional<PageLayoutId>& required_layout, PinPageToJob pin_page_to_job,
-      OkIfNotFound ok_if_not_found)
-  {
-    return PageIdSlot::load_through_impl(slot_ref, *this, required_layout, pin_page_to_job,
-                                         ok_if_not_found, page_id);
-  }
+  virtual StatusOr<PinnedPageT> load_page(PageId page_id, const PageLoadOptions& options) = 0;
 
  protected:
   BasicPageLoader() = default;

@@ -136,6 +136,11 @@ class PageCacheJob : public PageLoader
   std::atomic<bool> count_get_calls{false};
   DebugMask debug_mask;
 
+  PageCache* page_cache() const override
+  {
+    return std::addressof(this->cache());
+  }
+
   PageCache& cache() const noexcept
   {
     return *cache_;
@@ -191,10 +196,11 @@ class PageCacheJob : public PageLoader
   // Inserts a new page into the cache.  The passed PageView must have been created using a
   // PageBuffer returned by `new_page` for this job, or we will panic.
   //
-  StatusOr<PinnedPage> pin_new(std::shared_ptr<PageView>&& page_view, u64 callers);
+  StatusOr<PinnedPage> pin_new(std::shared_ptr<PageView>&& page_view, LruPriority lru_priority,
+                               u64 callers);
 
   StatusOr<PinnedPage> pin_new_impl(
-      std::shared_ptr<PageView>&& page_view, u64 callers,
+      std::shared_ptr<PageView>&& page_view, LruPriority lru_priority, u64 callers,
       std::function<StatusOr<PinnedPage>(const std::function<StatusOr<PinnedPage>()>&)>&&
           put_with_retry);
 
@@ -202,11 +208,13 @@ class PageCacheJob : public PageLoader
    * no free cache slots.
    */
   template <typename RetryPolicy>
-  StatusOr<PinnedPage> pin_new_with_retry(std::shared_ptr<PageView>&& page_view, u64 callers,
+  StatusOr<PinnedPage> pin_new_with_retry(std::shared_ptr<PageView>&& page_view,
+                                          LruPriority lru_priority, u64 callers,
                                           RetryPolicy&& retry_policy)
   {
     StatusOr<PinnedPage> pinned_page = this->pin_new_impl(
-        std::move(page_view), callers, [&retry_policy](const auto& op) -> StatusOr<PinnedPage> {
+        std::move(page_view), lru_priority, callers,
+        [&retry_policy](const auto& op) -> StatusOr<PinnedPage> {
           return batt::with_retry_policy(
               retry_policy, /*op_name=*/"PageCacheJob::pin_new() - Cache::put_view", op,
               batt::TaskSleepImpl{},
@@ -255,24 +263,20 @@ class PageCacheJob : public PageLoader
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
   // PageLoader interface
   //
-  using PageLoader::get_page;
-  using PageLoader::get_page_in_job;
-  using PageLoader::get_page_slot;
-  using PageLoader::get_page_slot_in_job;
-  using PageLoader::get_page_slot_with_layout;
-  using PageLoader::get_page_slot_with_layout_in_job;
-  using PageLoader::get_page_with_layout;
 
   // Hint to the cache that it is likely we will ask for this page in the near future.
   //
   void prefetch_hint(PageId page_id) override;
 
+  // Attempt to pin the page without loading it.
+  //
+  // Should return kUnavailable if the page is not cached.
+  //
+  StatusOr<PinnedPage> try_pin_cached_page(PageId page_id, const PageLoadOptions& options) override;
+
   // Load the page, first checking the pinned pages and views in this job.
   //
-  StatusOr<PinnedPage> get_page_with_layout_in_job(PageId page_id,
-                                                   const Optional<PageLayoutId>& required_layout,
-                                                   PinPageToJob pin_page_to_job,
-                                                   OkIfNotFound ok_if_not_found) override;
+  StatusOr<PinnedPage> load_page(PageId page_id, const PageLoadOptions& options) override;
   //
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -280,10 +284,14 @@ class PageCacheJob : public PageLoader
 
   Optional<PinnedPage> get_already_pinned(PageId page_id, PinPageToJob pin_page_to_job);
 
+  StatusOr<PinnedPage> get_new_pinned_page(PageId page_id);
+
   void const_prefetch_hint(PageId page_id) const;
 
-  StatusOr<PinnedPage> const_get(PageId page_id, const Optional<PageLayoutId>& required_layout,
-                                 OkIfNotFound ok_if_not_found) const;
+  StatusOr<PinnedPage> const_try_pin_cached_page(PageId page_id,
+                                                 const PageLoadOptions& options) const;
+
+  StatusOr<PinnedPage> const_get(PageId page_id, const PageLoadOptions& options) const;
 
   std::ostream& debug()
   {
@@ -388,9 +396,6 @@ class PageCacheJob : public PageLoader
   {
     return this->recovered_pages_.count(page_id) != 0;
   }
-
-  LLFS_METHOD_BINDER(PageCacheJob, prefetch_hint, Prefetch);
-  LLFS_METHOD_BINDER(PageCacheJob, get_page_slot, Get);
 
   int binder_count = 0;
 

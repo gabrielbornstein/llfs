@@ -52,7 +52,8 @@ const PageIdFactory& PageDeviceCache::page_ids() const noexcept
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 batt::StatusOr<PageCacheSlot::PinnedRef> PageDeviceCache::find_or_insert(
-    PageId key, const batt::SmallFn<void(const PageCacheSlot::PinnedRef&)>& initialize)
+    PageId key, PageSize page_size, LruPriority lru_priority,
+    const batt::SmallFn<void(const PageCacheSlot::PinnedRef&)>& initialize)
 {
   static const bool kEvictOldGenSlot =
       batt::getenv_as<bool>("LLFS_EVICT_OLD_GEN_SLOT").value_or(false);
@@ -105,7 +106,7 @@ batt::StatusOr<PageCacheSlot::PinnedRef> PageDeviceCache::find_or_insert(
 
         // Refresh the LTS.
         //
-        slot->update_latest_use();
+        slot->update_latest_use(lru_priority);
 
         // Done! (Found existing value)
         //
@@ -129,7 +130,7 @@ batt::StatusOr<PageCacheSlot::PinnedRef> PageDeviceCache::find_or_insert(
               this->metrics().evict_prior_generation_count.add(1);
               new_slot.emplace();
               new_slot->p_slot = slot;
-              new_slot->pinned_ref = slot->fill(key);
+              new_slot->pinned_ref = slot->fill(key, page_size, lru_priority);
 
               LLFS_PAGE_CACHE_ASSERT_EQ(new_slot->p_slot, observed_slot_ptr);
               break;
@@ -152,7 +153,7 @@ batt::StatusOr<PageCacheSlot::PinnedRef> PageDeviceCache::find_or_insert(
       }
       LLFS_PAGE_CACHE_ASSERT(!new_slot->p_slot->is_valid());
 
-      new_slot->pinned_ref = new_slot->p_slot->fill(key);
+      new_slot->pinned_ref = new_slot->p_slot->fill(key, page_size, lru_priority);
     }
 
     // If we can atomically overwrite the slot index value we saw above (CAS), then we are done!
@@ -171,8 +172,39 @@ batt::StatusOr<PageCacheSlot::PinnedRef> PageDeviceCache::find_or_insert(
 
   // Done! (Admitted new value)
   //
-  this->metrics().admit_count.add(1);
   return {std::move(new_slot->pinned_ref)};
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+batt::StatusOr<PageCacheSlot::PinnedRef> PageDeviceCache::try_find(PageId key,
+                                                                   LruPriority lru_priority)
+{
+  LLFS_PAGE_CACHE_ASSERT_EQ(PageIdFactory::get_device_id(key), this->page_ids_.get_device_id());
+  this->metrics().query_count.add(1);
+
+  // Lookup the cache table entry for the given page id.
+  //
+  const i64 physical_page = this->page_ids_.get_physical_page(key);
+  std::atomic<PageCacheSlot*>& slot_ptr_ref = this->get_slot_ptr_ref(physical_page);
+
+  // Let's take a look at what's there now...
+  //
+  PageCacheSlot* observed_slot_ptr = slot_ptr_ref.load();
+
+  // There is a slot assigned to this physical page, so try to pin it.
+  //
+  if (observed_slot_ptr != nullptr) {
+    PageCacheSlot::PinnedRef pinned = observed_slot_ptr->acquire_pin(key);
+    if (pinned) {
+      observed_slot_ptr->update_latest_use(lru_priority);
+      this->metrics().hit_count.add(1);
+      return {std::move(pinned)};
+    }
+    this->metrics().stale_count.add(1);
+  }
+
+  return {batt::StatusCode::kUnavailable};
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -200,7 +232,6 @@ void PageDeviceCache::erase(PageId key)
         break;
       }
     } while (slot_ptr == slot_ptr_to_erase);
-    this->metrics().erase_count.add(1);
   };
 
   // If the slot is still holding the passed id, then clear it out.

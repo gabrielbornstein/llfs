@@ -52,7 +52,18 @@ namespace llfs {
 
 // The number of bits in a page_id int allocated to page device.
 //
-constexpr usize kPageDeviceIdBits = 24;
+constexpr usize kPageIdBits = 64;
+constexpr usize kPageIdDeviceBits = 8;
+constexpr usize kPageIdGenerationBits = 24;
+constexpr usize kPageIdAddressBits = 32;
+
+static_assert(kPageIdDeviceBits + kPageIdGenerationBits + kPageIdAddressBits == kPageIdBits);
+
+constexpr usize kPageIdAddressShift = 0;
+constexpr usize kPageIdGenerationShift = kPageIdAddressBits + kPageIdAddressShift;
+constexpr usize kPageIdDeviceShift = kPageIdGenerationBits + kPageIdGenerationShift;
+
+static_assert(kPageIdDeviceBits + kPageIdDeviceShift == kPageIdBits);
 
 // The queue discipline for page pool allocation.
 //

@@ -280,7 +280,7 @@ class PageCacheSlot
    *
    * May only be called when the slot is in an invalid state.
    */
-  PinnedRef fill(PageId key);
+  PinnedRef fill(PageId key, PageSize page_size, i64 lru_priority);
 
   /** \brief Sets the key and value of the slot to empty/null.
    *
@@ -289,13 +289,19 @@ class PageCacheSlot
    */
   void clear();
 
+  /** \brief Returns the page size (if any) of the cached page for this slot.
+   *
+   * This function MUST be called while the slot is invalid, or we panic.
+   */
+  PageSize get_page_size_while_invalid() const;
+
   //----- --- -- -  -  -   -
 
   /** \brief Updates the latest use logical timestamp for this object, to make eviction less likely.
    *
    * Only has an effect if the "obsolete hint" (see set_obsolete_hint, get_obsolete_hint) is false.
    */
-  void update_latest_use();
+  void update_latest_use(i64 lru_priority);
 
   /** Give a hint to the cache that this slot is unlikely to be needed again in the future.
    *
@@ -339,6 +345,7 @@ class PageCacheSlot
   std::atomic<u64> ref_count_{0};
   std::atomic<i64> latest_use_{0};
   std::atomic<i64> obsolete_{0};
+  PageSize page_size_{0};
 };
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
@@ -438,9 +445,9 @@ BATT_ALWAYS_INLINE inline void PageCacheSlot::extend_pin()
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-BATT_ALWAYS_INLINE inline void PageCacheSlot::update_latest_use()
+BATT_ALWAYS_INLINE inline void PageCacheSlot::update_latest_use(i64 lru_priority)
 {
-  this->latest_use_.store(LRUClock::advance_local() + this->obsolete_.load());
+  this->latest_use_.store(LRUClock::advance_local() + this->obsolete_.load() + lru_priority);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -448,7 +455,7 @@ BATT_ALWAYS_INLINE inline void PageCacheSlot::update_latest_use()
 BATT_ALWAYS_INLINE inline void PageCacheSlot::set_obsolete_hint()
 {
   this->obsolete_.store(kObsoletePenalty);
-  this->update_latest_use();
+  this->update_latest_use(0);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -480,76 +487,6 @@ BATT_ALWAYS_INLINE inline void PageCacheSlot::release_pin()
     (void)this->state_.load(std::memory_order_acquire);
 
     this->remove_ref();
-  }
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-BATT_ALWAYS_INLINE inline bool PageCacheSlot::evict()
-{
-  // Use a CAS loop here to guarantee an atomic transition from Valid + Filled (unpinned) state to
-  // Invalid.
-  //
-  auto observed_state = this->state_.load(std::memory_order_acquire);
-  for (;;) {
-    if (Self::is_pinned(observed_state) || !Self::is_valid(observed_state)) {
-      return false;
-    }
-
-    // Clear the valid bit from the state mask.
-    //
-    const auto target_state = observed_state & ~kValidMask;
-    if (this->state_.compare_exchange_weak(observed_state, target_state)) {
-      LLFS_PAGE_CACHE_ASSERT(!this->is_valid());
-      return true;
-    }
-  }
-}
-
-//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
-//
-BATT_ALWAYS_INLINE inline bool PageCacheSlot::evict_if_key_equals(PageId key)
-{
-  // The slot must be pinned in order to read the key, so increase the pin count.
-  //
-  const auto old_state = this->state_.fetch_add(kPinCountDelta, std::memory_order_acquire);
-  auto observed_state = old_state + kPinCountDelta;
-
-  const bool newly_pinned = !Self::is_pinned(old_state);
-  if (newly_pinned) {
-    this->add_ref();
-  }
-
-  BATT_CHECK_EQ(observed_state & Self::kOverflowMask, 0);
-
-  // Use a CAS loop here to guarantee an atomic transition from Valid + Filled (unpinned) state to
-  // Invalid.
-  //
-  for (;;) {
-    // To succeed, we must be holding the only pin, the slot must be valid, and the key must match.
-    //
-    if (!(Self::get_pin_count(observed_state) == 1 && Self::is_valid(observed_state) &&
-          this->key_ == key)) {
-      this->release_pin();
-      return false;
-    }
-
-    // Clear the valid bit from the state mask and release the pin count we acquired above.
-    //
-    auto target_state = ((observed_state - kPinCountDelta) & ~kValidMask);
-
-    BATT_CHECK(!Self::is_pinned(target_state) && !Self::is_valid(target_state))
-        << BATT_INSPECT(target_state);
-
-    if (this->state_.compare_exchange_weak(observed_state, target_state)) {
-      BATT_CHECK(!Self::is_valid());
-      // At this point, we always expect to be going from pinned to unpinned.
-      // In order to successfully evict the slot, we must be holding the only pin,
-      // as guarenteed by the first if statement in the for loop.
-      //
-      this->remove_ref();
-      return true;
-    }
   }
 }
 

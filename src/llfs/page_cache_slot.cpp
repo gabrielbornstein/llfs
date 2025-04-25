@@ -38,7 +38,7 @@ usize PageCacheSlot::index() const
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-auto PageCacheSlot::fill(PageId key) -> PinnedRef
+auto PageCacheSlot::fill(PageId key, PageSize page_size, i64 lru_priority) -> PinnedRef
 {
   BATT_CHECK(!this->is_valid());
   BATT_CHECK(key.is_valid());
@@ -47,11 +47,15 @@ auto PageCacheSlot::fill(PageId key) -> PinnedRef
   this->value_.emplace();
   this->p_value_ = std::addressof(*this->value_);
   this->obsolete_.store(0);
-  this->update_latest_use();
+  this->page_size_ = page_size;
+  this->update_latest_use(lru_priority);
 
   auto observed_state = this->state_.fetch_add(kPinCountDelta) + kPinCountDelta;
   BATT_CHECK_EQ(observed_state & Self::kOverflowMask, 0);
   BATT_CHECK(Self::is_pinned(observed_state));
+
+  this->pool_.metrics().admit_count.add(1);
+  this->pool_.metrics().admit_byte_count.add(page_size);
 
   this->add_ref();
   this->set_valid();
@@ -65,11 +69,102 @@ void PageCacheSlot::clear()
 {
   BATT_CHECK(!this->is_valid());
 
+  this->pool_.metrics().erase_count.add(1);
+  this->pool_.metrics().erase_byte_count.add(this->page_size_);
+
   this->key_ = PageId{};
   this->value_ = None;
   this->p_value_ = nullptr;
   this->obsolete_.store(0);
+  this->page_size_ = PageSize{0};
   this->set_valid();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+bool PageCacheSlot::evict()
+{
+  // Use a CAS loop here to guarantee an atomic transition from Valid + Filled (unpinned) state to
+  // Invalid.
+  //
+  auto observed_state = this->state_.load(std::memory_order_acquire);
+  for (;;) {
+    if (Self::is_pinned(observed_state) || !Self::is_valid(observed_state)) {
+      return false;
+    }
+
+    // Clear the valid bit from the state mask.
+    //
+    const auto target_state = observed_state & ~kValidMask;
+    if (this->state_.compare_exchange_weak(observed_state, target_state)) {
+      LLFS_PAGE_CACHE_ASSERT(!this->is_valid());
+
+      this->pool_.metrics().evict_count.add(1);
+      this->pool_.metrics().evict_byte_count.add(this->page_size_);
+
+      return true;
+    }
+  }
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+bool PageCacheSlot::evict_if_key_equals(PageId key)
+{
+  // The slot must be pinned in order to read the key, so increase the pin count.
+  //
+  const auto old_state = this->state_.fetch_add(kPinCountDelta, std::memory_order_acquire);
+  auto observed_state = old_state + kPinCountDelta;
+
+  const bool newly_pinned = !Self::is_pinned(old_state);
+  if (newly_pinned) {
+    this->add_ref();
+  }
+
+  BATT_CHECK_EQ(observed_state & Self::kOverflowMask, 0);
+
+  // Use a CAS loop here to guarantee an atomic transition from Valid + Filled (unpinned) state to
+  // Invalid.
+  //
+  for (;;) {
+    // To succeed, we must be holding the only pin, the slot must be valid, and the key must match.
+    //
+    if (!(Self::get_pin_count(observed_state) == 1 && Self::is_valid(observed_state) &&
+          this->key_ == key)) {
+      this->release_pin();
+      return false;
+    }
+
+    // Clear the valid bit from the state mask and release the pin count we acquired above.
+    //
+    auto target_state = ((observed_state - kPinCountDelta) & ~kValidMask);
+
+    BATT_CHECK(!Self::is_pinned(target_state) && !Self::is_valid(target_state))
+        << BATT_INSPECT(target_state);
+
+    if (this->state_.compare_exchange_weak(observed_state, target_state)) {
+      BATT_CHECK(!Self::is_valid());
+
+      this->pool_.metrics().evict_count.add(1);
+      this->pool_.metrics().evict_byte_count.add(this->page_size_);
+
+      // At this point, we always expect to be going from pinned to unpinned.
+      // In order to successfully evict the slot, we must be holding the only pin,
+      // as guarenteed by the first if statement in the for loop.
+      //
+      this->remove_ref();
+      return true;
+    }
+  }
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+PageSize PageCacheSlot::get_page_size_while_invalid() const
+{
+  BATT_CHECK(!this->is_valid());
+
+  return this->page_size_;
 }
 
 #if LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT

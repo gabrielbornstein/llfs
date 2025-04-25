@@ -10,9 +10,11 @@
 //
 
 #include <llfs/committable_page_cache_job.hpp>
+#include <llfs/ioring_page_file_device.hpp>
 #include <llfs/memory_log_device.hpp>
 #include <llfs/metrics.hpp>
 #include <llfs/page_cache_job.hpp>
+#include <llfs/sharded_page_view.hpp>
 #include <llfs/status_code.hpp>
 
 #include <boost/range/irange.hpp>
@@ -100,9 +102,13 @@ PageCache::PageCache(std::vector<PageArena>&& storage_pool,
                      const PageCacheOptions& options) noexcept
     : options_{options}
     , metrics_{}
+    , cache_slot_pool_{PageCacheSlot::Pool::make_new(
+          options.cache_slot_count, options.max_cache_size_bytes, "PageCacheSlot_Pool")}
     , page_readers_{std::make_shared<batt::Mutex<PageLayoutReaderMap>>()}
 {
+#if 0
   this->cache_slot_pool_by_page_size_log2_.fill(nullptr);
+#endif
 
   // Find the maximum page device id value.
   //
@@ -110,6 +116,47 @@ PageCache::PageCache(std::vector<PageArena>&& storage_pool,
   for (const PageArena& arena : storage_pool) {
     max_page_device_id = std::max(max_page_device_id, arena.device().get_id());
   }
+
+  // Add sharded page view devices to storage pool.
+  //
+  std::vector<PageArena> sharded_view_arenas;
+  std::unordered_map<page_device_id_int, std::vector<page_device_id_int>> sharded_view_mappings;
+  for (const std::pair<PageSize, PageSize>& sharded_view : options.sharded_views) {
+    // For every sharded view type requested (page_size -> shard_size), we find all devices whose
+    // page size matches, and create sharded views for each of them.
+    //
+    for (PageArena& arena : storage_pool) {
+      // Is this the right sized page?
+      //
+      if (get_page_size(arena) == sharded_view.first) {
+        // Limitation: we can currently only create sharded views for IoRingPageFileDevice objects.
+        //
+        IoRingPageFileDevice* src_device = arena.device().as_io_ring_page_file_device();
+        if (src_device != nullptr) {
+          // Increase the max_page_device_id to allocate a new identifier for the sharded view
+          // device.
+          //
+          ++max_page_device_id;
+          const page_device_id_int sharded_view_id = max_page_device_id;
+
+          // Add a sharded view mapping; we will use this to link devices to their sharded views
+          // later.
+          //
+          sharded_view_mappings[arena.id()].emplace_back(sharded_view_id);
+
+          // Create a PageDevice and PageArena for the sharded view.
+          //
+          sharded_view_arenas.emplace_back(PageArena{
+              src_device->make_sharded_view(sharded_view_id, sharded_view.second),
+              nullptr,
+          });
+        }
+      }
+    }
+  }
+  storage_pool.insert(storage_pool.end(),  //
+                      std::make_move_iterator(sharded_view_arenas.begin()),
+                      std::make_move_iterator(sharded_view_arenas.end()));
 
   // Populate this->page_devices_.
   //
@@ -123,21 +170,33 @@ PageCache::PageCache(std::vector<PageArena>&& storage_pool,
 
     BATT_CHECK_LT(page_size_log2, kMaxPageSizeLog2);
 
+#if 0
     // Create a slot pool for this page size if we haven't already done so.
     //
     if (!this->cache_slot_pool_by_page_size_log2_[page_size_log2]) {
       this->cache_slot_pool_by_page_size_log2_[page_size_log2] = PageCacheSlot::Pool::make_new(
-          /*n_slots=*/this->options_.max_cached_pages_per_size_log2[page_size_log2],
+          /*n_slots=*/SlotCount{this->options_.max_cached_pages_per_size_log2[page_size_log2]},
           /*name=*/batt::to_string("size_", u64{1} << page_size_log2));
     }
+#endif
 
+    BATT_CHECK_LT(device_id, this->page_devices_.size());
     BATT_CHECK_EQ(this->page_devices_[device_id], nullptr)
         << "Duplicate entries found for the same device id!" << BATT_INSPECT(device_id);
 
-    this->page_devices_[device_id] = std::make_unique<PageDeviceEntry>(            //
-        std::move(arena),                                                          //
+    this->page_devices_[device_id] = std::make_unique<PageDeviceEntry>(  //
+        std::move(arena),                                                //
+        batt::make_copy(this->cache_slot_pool_)
+#if 0
         batt::make_copy(this->cache_slot_pool_by_page_size_log2_[page_size_log2])  //
+#endif
     );
+
+    PageDeviceEntry& device_entry = *this->page_devices_[device_id];
+
+    if (!device_entry.arena.has_allocator()) {
+      device_entry.can_alloc = false;
+    }
 
     // We will sort these later.
     //
@@ -161,6 +220,26 @@ PageCache::PageCache(std::vector<PageArena>&& storage_pool,
         as_slice(this->page_devices_by_page_size_.data() +
                      std::distance(this->page_devices_by_page_size_.begin(), iter_pair.first),
                  as_range(iter_pair).size());
+  }
+
+  // Cross-link all page devices to their sharded view entries.
+  //
+  for (const auto& [device_id, sharded_view_ids] : sharded_view_mappings) {
+    BATT_CHECK_LT(device_id, this->page_devices_.size());
+    PageDeviceEntry& device_entry = *this->page_devices_[device_id];
+    for (page_device_id_int sharded_view_id : sharded_view_ids) {
+      PageDeviceEntry& sharded_view_entry = *this->page_devices_[sharded_view_id];
+      const i32 shard_size_log2 = batt::log2_ceil(get_page_size(sharded_view_entry.arena));
+
+      // Sanity checks.
+      //
+      BATT_CHECK(!sharded_view_entry.can_alloc);
+      BATT_CHECK_GT(shard_size_log2, 8);
+      BATT_CHECK_LT(shard_size_log2, 32);
+      BATT_CHECK_EQ(device_entry.sharded_views[shard_size_log2], nullptr);
+
+      device_entry.sharded_views[shard_size_log2] = std::addressof(sharded_view_entry);
+    }
   }
 
   // Register metrics.
@@ -275,6 +354,36 @@ Status PageCache::assign_filter_device(PageSize src_page_size, PageSize filter_p
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+Optional<PageId> PageCache::page_shard_id_for(PageId full_page_id,
+                                              const Interval<usize>& shard_range)
+{
+  const usize shard_size = shard_range.size();
+
+  BATT_CHECK_EQ(batt::bit_count(shard_size), 1) << "shard sizes must be powers of 2";
+  BATT_CHECK_EQ(shard_range.lower_bound & (shard_size - 1), 0)
+      << "shard offsets must be aligned to the shard size";
+
+  PageDeviceEntry* const src_entry = this->get_device_for_page(full_page_id);
+
+  const i32 shard_size_log2 = batt::log2_ceil(shard_size);
+  const i32 shards_per_page_log2 = src_entry->page_size_log2 - shard_size_log2;
+
+  BATT_CHECK_GT(src_entry->page_size_log2, shard_size_log2);
+
+  PageDeviceEntry* const dst_entry = src_entry->sharded_views[shard_size_log2];
+  if (!dst_entry) {
+    return None;
+  }
+
+  const u64 shard_index_in_page = shard_range.lower_bound >> shard_size_log2;
+
+  return full_page_id  //
+      .set_device_id_shifted(dst_entry->device_id_shifted)
+      .set_address((full_page_id.address() << shards_per_page_log2) | shard_index_in_page);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 bool PageCache::register_page_layout(const PageLayoutId& layout_id, const PageReader& reader)
 {
   LLFS_LOG_WARNING() << "PageCache::register_page_layout is DEPRECATED; please use "
@@ -321,6 +430,7 @@ void PageCache::close()
       entry->arena.halt();
     }
   }
+  this->cache_slot_pool_->halt();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -332,6 +442,7 @@ void PageCache::join()
       entry->arena.join();
     }
   }
+  this->cache_slot_pool_->join();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -485,7 +596,9 @@ Status PageCache::detach(const boost::uuids::uuid& user_id, slot_offset_type slo
 //
 void PageCache::prefetch_hint(PageId page_id)
 {
-  (void)this->find_page_in_cache(page_id, /*require_tag=*/None, OkIfNotFound{true});
+  (void)this->find_page_in_cache(page_id, PageLoadOptions{}  //
+                                              .required_layout(None)
+                                              .ok_if_not_found(true));
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -560,8 +673,8 @@ void PageCache::async_write_new_page(PinnedPage&& pinned_page,
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<PinnedPage> PageCache::put_view(std::shared_ptr<const PageView>&& view, u64 callers,
-                                         u64 job_id)
+StatusOr<PinnedPage> PageCache::put_view(std::shared_ptr<const PageView>&& view,
+                                         LruPriority lru_priority, u64 callers, u64 job_id)
 {
   BATT_CHECK_NOT_NULLPTR(view);
 
@@ -577,17 +690,19 @@ StatusOr<PinnedPage> PageCache::put_view(std::shared_ptr<const PageView>&& view,
 
   const PageView* p_view = view.get();
   const PageId page_id = view->page_id();
+  const PageSize page_size = view->page_size();
 
   PageDeviceEntry* const entry = this->get_device_for_page(page_id);
   BATT_CHECK_NOT_NULLPTR(entry);
 
   // Attempt to insert the new page view into the cache.
   //
-  batt::StatusOr<PageCacheSlot::PinnedRef> pinned_cache_slot = entry->cache.find_or_insert(
-      page_id, [&entry, &view](const PageCacheSlot::PinnedRef& pinned_ref) {
-        entry->cache.metrics().insert_count.add(1);
-        pinned_ref->set_value(std::move(view));
-      });
+  batt::StatusOr<PageCacheSlot::PinnedRef> pinned_cache_slot =
+      entry->cache.find_or_insert(page_id, page_size, lru_priority,
+                                  [&entry, &view](const PageCacheSlot::PinnedRef& pinned_ref) {
+                                    entry->cache.metrics().insert_count.add(1);
+                                    pinned_ref->set_value(std::move(view));
+                                  });
 
   this->track_new_page_event(NewPageTracker{
       .ts = 0,
@@ -630,11 +745,38 @@ void PageCache::purge(PageId page_id, u64 callers, u64 job_id)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-StatusOr<PinnedPage> PageCache::get_page_with_layout_in_job(
-    PageId page_id, const Optional<PageLayoutId>& require_layout, PinPageToJob pin_page_to_job,
-    OkIfNotFound ok_if_not_found)
+StatusOr<PinnedPage> PageCache::try_pin_cached_page(PageId page_id,
+                                                    const PageLoadOptions& options) /*override*/
 {
-  if (bool_from(pin_page_to_job, /*default_value=*/false)) {
+  if (bool_from(options.pin_page_to_job(), /*default_value=*/false)) {
+    return Status{batt::StatusCode::kUnimplemented};
+  }
+
+  if (!page_id) {
+    return ::llfs::make_status(StatusCode::kPageIdInvalid);
+  }
+
+  PageDeviceEntry* const entry = this->get_device_for_page(page_id);
+  BATT_CHECK_NOT_NULLPTR(entry);
+
+  BATT_ASSIGN_OK_RESULT(PageCacheSlot::PinnedRef pinned_ref,
+                        entry->cache.try_find(page_id, options.lru_priority()));
+
+  BATT_ASSIGN_OK_RESULT(std::shared_ptr<const PageView> loaded, pinned_ref->poll());
+
+  if (options.required_layout() &&
+      *options.required_layout() != ShardedPageView::page_layout_id()) {
+    BATT_REQUIRE_OK(require_page_layout(loaded->page_buffer(), options.required_layout()));
+  }
+
+  return PinnedPage{loaded.get(), std::move(pinned_ref)};
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+StatusOr<PinnedPage> PageCache::load_page(PageId page_id, const PageLoadOptions& options)
+{
+  if (bool_from(options.pin_page_to_job(), /*default_value=*/false)) {
     return Status{batt::StatusCode::kUnimplemented};
   }
 
@@ -645,11 +787,11 @@ StatusOr<PinnedPage> PageCache::get_page_with_layout_in_job(
   }
 
   BATT_ASSIGN_OK_RESULT(PageCacheSlot::PinnedRef pinned_slot,  //
-                        this->find_page_in_cache(page_id, require_layout, ok_if_not_found));
+                        this->find_page_in_cache(page_id, options));
 
   StatusOr<std::shared_ptr<const PageView>> loaded = pinned_slot->await();
   if (!loaded.ok()) {
-    if (!ok_if_not_found) {
+    if (!options.ok_if_not_found()) {
       LLFS_LOG_ERROR() << loaded.status() << std::endl << boost::stacktrace::stacktrace{};
     }
     return loaded.status();
@@ -662,8 +804,7 @@ StatusOr<PinnedPage> PageCache::get_page_with_layout_in_job(
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-auto PageCache::find_page_in_cache(PageId page_id, const Optional<PageLayoutId>& required_layout,
-                                   OkIfNotFound ok_if_not_found)
+auto PageCache::find_page_in_cache(PageId page_id, const PageLoadOptions& options)
     -> batt::StatusOr<PageCacheSlot::PinnedRef>
 {
   if (!page_id) {
@@ -673,11 +814,13 @@ auto PageCache::find_page_in_cache(PageId page_id, const Optional<PageLayoutId>&
   PageDeviceEntry* const entry = this->get_device_for_page(page_id);
   BATT_CHECK_NOT_NULLPTR(entry);
 
-  return entry->cache.find_or_insert(page_id, [this, entry, &required_layout, ok_if_not_found](
-                                                  const PageCacheSlot::PinnedRef& pinned_slot) {
-    entry->cache.metrics().miss_count.add(1);
-    this->async_load_page_into_slot(pinned_slot, required_layout, ok_if_not_found);
-  });
+  return entry->cache.find_or_insert(
+      page_id, entry->page_size(), options.lru_priority(),
+      [this, entry, &options](const PageCacheSlot::PinnedRef& pinned_slot) {
+        entry->cache.metrics().miss_count.add(1);
+        this->async_load_page_into_slot(pinned_slot, options.required_layout(),
+                                        options.ok_if_not_found());
+      });
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -735,33 +878,40 @@ void PageCache::async_load_page_into_slot(const PageCacheSlot::PinnedRef& pinned
         // Page read succeeded!  Find the right typed reader.
         //
         std::shared_ptr<const PageBuffer>& page_data = *result;
-        p_metrics->total_bytes_read.add(page_data->size());
+        StatusOr<std::shared_ptr<const PageView>> page_view;
 
-        Status layout_status = require_page_layout(*page_data, required_layout);
-        if (!layout_status.ok()) {
-          latch->set_value(layout_status);
-          return;
-        }
-        PageLayoutId layout_id = get_page_header(*page_data).layout_id;
+        p_metrics->total_bytes_read.add(get_page_size(page_data));
 
-        PageReader reader_for_layout;
-        {
-          auto locked = page_readers->lock();
-          auto iter = locked->find(layout_id);
-          if (iter == locked->end()) {
-            LLFS_LOG_ERROR() << "Unknown page layout: "
-                             << batt::c_str_literal(
-                                    std::string_view{(const char*)&layout_id, sizeof(layout_id)})
-                             << BATT_INSPECT(page_id);
-            latch->set_value(make_status(StatusCode::kNoReaderForPageViewType));
+        if (required_layout && *required_layout == ShardedPageView::page_layout_id()) {
+          page_view = std::make_shared<ShardedPageView>(std::move(page_data));
+
+        } else {
+          Status layout_status = require_page_layout(*page_data, required_layout);
+          if (!layout_status.ok()) {
+            latch->set_value(layout_status);
             return;
           }
-          reader_for_layout = iter->second.page_reader;
-        }
-        // ^^ Release the page_readers mutex ASAP
+          PageLayoutId layout_id = get_page_header(*page_data).layout_id;
 
-        StatusOr<std::shared_ptr<const PageView>> page_view =
-            reader_for_layout(std::move(page_data));
+          PageReader reader_for_layout;
+          {
+            auto locked = page_readers->lock();
+            auto iter = locked->find(layout_id);
+            if (iter == locked->end()) {
+              LLFS_LOG_ERROR() << "Unknown page layout: "
+                               << batt::c_str_literal(
+                                      std::string_view{(const char*)&layout_id, sizeof(layout_id)})
+                               << BATT_INSPECT(page_id);
+              latch->set_value(make_status(StatusCode::kNoReaderForPageViewType));
+              return;
+            }
+            reader_for_layout = iter->second.page_reader;
+          }
+          // ^^ Release the page_readers mutex ASAP
+
+          page_view = reader_for_layout(std::move(page_data));
+        }
+
         if (page_view.ok()) {
           BATT_CHECK_EQ(page_view->use_count(), 1u);
         }

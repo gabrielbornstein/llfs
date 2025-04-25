@@ -27,6 +27,8 @@
 
 namespace llfs {
 
+class IoRingPageFileDevice;
+
 class PageDevice
 {
  public:
@@ -35,6 +37,8 @@ class PageDevice
 
   using WriteHandler = std::function<void(PageDevice::WriteResult)>;
   using ReadHandler = std::function<void(PageDevice::ReadResult)>;
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   PageDevice(const PageDevice&) = delete;
   PageDevice& operator=(const PageDevice&) = delete;
@@ -63,6 +67,11 @@ class PageDevice
       out << "PageDevice{.id=" << this->get_id() << ", .page_size=" << this->page_size()
           << ", .capacity=" << this->capacity() << ",}";
     };
+  }
+
+  virtual IoRingPageFileDevice* as_io_ring_page_file_device()
+  {
+    return nullptr;
   }
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

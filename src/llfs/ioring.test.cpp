@@ -139,8 +139,8 @@ TEST(IoRingTest, DISABLED_BlockDev)
 
   using llfs::PageBuffer;
 
-  auto page = PageBuffer::allocate(llfs::PageSize{2 * kMiB});
-  MutableBuffer buf = page->mutable_buffer();
+  auto page = PageBuffer::allocate(llfs::PageSize{2 * kMiB}, llfs::PageId{});
+  MutableBuffer buf = get_mutable_buffer(page);
   std::memset(buf.data(), '@', buf.size());
 
   io->on_work_started();

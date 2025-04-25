@@ -22,7 +22,7 @@ BATT_STRONG_TYPEDEF(usize, ThreadPoolSize);
 
 BATT_STRONG_TYPEDEF(usize, MaxQueueDepth);
 
-/*! \brief If set to true and the specified item/page is not found, then additional diagnostics will
+/** \brief If set to true and the specified item/page is not found, then additional diagnostics will
  * be emitted (via logging).  Setting to false will suppress these diagnostics (as the application
  * has indicated that 'not found' is an expected/normal case for these calls).
  */
@@ -39,7 +39,7 @@ BATT_STRONG_TYPEDEF(u64, TrimDelayByteCount);
 
 /** \brief Wrapper for off_t used as an offset.
  */
-BATT_STRONG_TYPEDEF(off_t, FileOffset);
+BATT_STRONG_TYPEDEF(i64, FileOffset);
 
 /** \brief Wrapper for off_t used as a dirent offset.
  */
@@ -47,7 +47,7 @@ BATT_STRONG_TYPEDEF(off_t, DirentOffset);
 
 /** \brief Wrapper for off_t used as a length.
  */
-BATT_STRONG_TYPEDEF(off_t, FileLength);
+BATT_STRONG_TYPEDEF(i64, FileLength);
 
 /** \brief Wrapper for int used as an fd.
  */
@@ -120,6 +120,18 @@ BATT_STRONG_TYPEDEF(usize, Word64Count);
 /** \brief A false-positive error rate.
  */
 BATT_STRONG_TYPEDEF(double, FalsePositiveRate);
+
+/** \brief A number of slots.
+ */
+BATT_STRONG_TYPEDEF(usize, SlotCount);
+
+/** \brief A limit on cache size, in bytes.
+ */
+BATT_STRONG_TYPEDEF(usize, MaxCacheSizeBytes);
+
+/** \brief The relative priority for LRU page eviction; higher == prefer *not* to evict.
+ */
+BATT_STRONG_TYPEDEF(i64, LruPriority);
 
 }  // namespace llfs
 

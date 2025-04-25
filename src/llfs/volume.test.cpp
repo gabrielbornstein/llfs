@@ -215,7 +215,7 @@ class VolumeTest : public ::testing::Test
     std::memset(buffer.data(), expected_byte_value(page_id), buffer.size());
 
     return job.pin_new(std::make_shared<llfs::OpaquePageView>(std::move(*page_allocated)),
-                       llfs::Caller::Unknown);
+                       llfs::LruPriority{0}, llfs::Caller::Unknown);
   }
 
   bool verify_opaque_page(llfs::PageId page_id, llfs::Optional<i32> expected_ref_count = llfs::None)
@@ -223,7 +223,7 @@ class VolumeTest : public ::testing::Test
     bool ok = true;
 
     llfs::StatusOr<llfs::PinnedPage> loaded =
-        this->page_cache->get_page(page_id, llfs::OkIfNotFound{false});
+        this->page_cache->load_page(page_id, llfs::PageLoadOptions{}.ok_if_not_found(false));
 
     EXPECT_TRUE(loaded.ok());
     if (!loaded.ok()) {

@@ -18,6 +18,11 @@ PageCacheOptions PageCacheOptions::with_default_values()
   PageCacheOptions opts;
 
   opts.default_log_size_ = 64 * kMiB;
+
+  opts.max_cache_size_bytes = MaxCacheSizeBytes{4 * kGiB};
+  opts.cache_slot_count = SlotCount{opts.max_cache_size_bytes / (4 * kKiB)};
+
+#if 0
   opts.max_cached_pages_per_size_log2.fill(0);
 
   // Assume that kDirectIOBlockSize..8192 are node sizes; allow a million nodes to be cached.
@@ -31,6 +36,7 @@ PageCacheOptions PageCacheOptions::with_default_values()
   for (usize n = 14; n < kMaxPageSizeLog2; ++n) {
     opts.max_cached_pages_per_size_log2[n] = 1 * kKiB;
   }
+#endif
 
   return opts;
 }

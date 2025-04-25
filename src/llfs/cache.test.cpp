@@ -15,9 +15,9 @@
 
 namespace {
 
-using llfs::Cache;
-using llfs::CacheSlotRef;
-using llfs::PinnedCacheSlot;
+using llfs::deprecated::Cache;
+using llfs::deprecated::CacheSlotRef;
+using llfs::deprecated::PinnedCacheSlot;
 
 TEST(CacheTest, Basic)
 {

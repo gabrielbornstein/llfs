@@ -43,14 +43,14 @@ class PinnedPage
     BATT_CHECK_EQ(this->page_view_ != nullptr, bool{this->pinned_cache_slot_});
   }
 
-  const PageView* get() const noexcept
+  const PageView* get() const
   {
     return this->page_view_;
   }
 
   /** \brief Returns the PageId for the page, if valid; otherwise returns PageId{kInvalidPageId}.
    */
-  PageId page_id() const noexcept
+  PageId page_id() const
   {
     if (BATT_HINT_FALSE(this->page_view_ == nullptr)) {
       return PageId{};
@@ -67,32 +67,32 @@ class PinnedPage
     }
   }
 
-  const PageView* operator->() const noexcept
+  const PageView* operator->() const
   {
     return this->get();
   }
 
-  const PageView& operator*() const noexcept
+  const PageView& operator*() const
   {
     return *this->get();
   }
 
-  explicit operator bool() const noexcept
+  explicit operator bool() const
   {
     return this->get() != nullptr;
   }
 
-  PageCacheSlot::PinnedRef get_cache_slot() const noexcept
+  PageCacheSlot::PinnedRef get_cache_slot() const
   {
     return this->pinned_cache_slot_;
   }
 
-  std::shared_ptr<const PageBuffer> get_page_buffer() const noexcept
+  std::shared_ptr<const PageBuffer> get_page_buffer() const
   {
     return this->page_view_->data();
   }
 
-  const PageBuffer& page_buffer() const noexcept
+  const PageBuffer& page_buffer() const
   {
     return this->page_view_->page_buffer();
   }
@@ -102,12 +102,22 @@ class PinnedPage
     return BATT_OK_RESULT_OR_PANIC(this->pinned_cache_slot_.get()->get_ready_value_or_panic());
   }
 
-  ConstBuffer const_buffer() const noexcept
+  ConstBuffer const_buffer() const
   {
     return this->page_view_->const_buffer();
   }
 
-  ConstBuffer const_payload() const noexcept
+  const void* raw_data() const
+  {
+    return std::addressof(this->page_view_->page_buffer());
+  }
+
+  PageSize page_size() const
+  {
+    return this->page_view_->page_size();
+  }
+
+  ConstBuffer const_payload() const
   {
     return this->page_view_->const_payload();
   }

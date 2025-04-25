@@ -78,11 +78,11 @@ template <typename ItemsRangeT, typename GetKeyFn>
 StatusOr<const PackedBloomFilterPage*> build_bloom_filter_page(
     batt::WorkerPool& worker_pool, const ItemsRangeT& items, const GetKeyFn& get_key_fn,
     BloomFilterLayout layout, usize bits_per_key, Optional<HashCount> opt_hash_count,
-    PageId src_page_id, PageBuffer* dst_filter_page_buffer)
+    PageId src_page_id, const std::shared_ptr<PageBuffer>& dst_filter_page_buffer)
 {
   // Set the page layout in the destination page buffer.
   //
-  PackedPageHeader* const filter_page_header = mutable_page_header(dst_filter_page_buffer);
+  PackedPageHeader* const filter_page_header = mutable_page_header(dst_filter_page_buffer.get());
 
   filter_page_header->layout_id = PackedBloomFilterPage::page_layout_id();
 
@@ -141,7 +141,7 @@ StatusOr<const PackedBloomFilterPage*> build_bloom_filter_page(
   filter_page_header->unused_begin = byte_distance(filter_page_header,  //
                                                    filter_data_end);
 
-  BATT_CHECK_LE(filter_page_header->unused_begin, dst_filter_page_buffer->size());
+  BATT_CHECK_LE(filter_page_header->unused_begin, get_page_size(dst_filter_page_buffer));
 
   // Now the header is full initialized; build the full filter from the packed edits.
   //

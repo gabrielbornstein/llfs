@@ -14,7 +14,7 @@
 #include <llfs/page_cache_slot.hpp>
 #include <llfs/page_id.hpp>
 #include <llfs/page_layout_id.hpp>
-#include <llfs/page_loader_decl.hpp>
+#include <llfs/page_loader.hpp>
 #include <llfs/pin_page_to_job.hpp>
 
 #include <llfs/metrics.hpp>
@@ -62,24 +62,21 @@ struct PageIdSlot {
   /** \brief Pass-though to the non-slot version.
    */
   template <typename PinnedPageT>
-  static batt::StatusOr<PinnedPageT> load_through_impl(
-      PageCacheSlot::AtomicRef& cache_slot_ref [[maybe_unused]],
-      BasicPageLoader<PinnedPageT>& loader, const Optional<PageLayoutId>& required_layout,
-      PinPageToJob pin_page_to_job, OkIfNotFound ok_if_not_found, PageId page_id) noexcept
+  static batt::StatusOr<PinnedPageT> load_through_impl(PageCacheSlot::AtomicRef& cache_slot_ref
+                                                       [[maybe_unused]],
+                                                       BasicPageLoader<PinnedPageT>& loader,
+                                                       PageId page_id,
+                                                       const PageLoadOptions& load_options)
   {
-    return loader.get_page_with_layout_in_job(page_id, required_layout, pin_page_to_job,
-                                              ok_if_not_found);
+    return loader.load_page(page_id, load_options);
   }
 
   /** \brief Attempts to pin the passed cache slot using the specified `page_id`; if this fails,
    * then falls back on loading the page from the `loader`, updating `cache_slot_ref` if successful.
    */
   static batt::StatusOr<PinnedPage> load_through_impl(PageCacheSlot::AtomicRef& cache_slot_ref,
-                                                      PageLoader& loader,
-                                                      const Optional<PageLayoutId>& required_layout,
-                                                      PinPageToJob pin_page_to_job,
-                                                      OkIfNotFound ok_if_not_found,
-                                                      PageId page_id) noexcept;
+                                                      PageLoader& loader, PageId page_id,
+                                                      const PageLoadOptions& load_options);
 
   /** \brief Attempts to pin the slot using the specified page_id.
    *
@@ -90,7 +87,7 @@ struct PageIdSlot {
    * (unless load error; see above)
    */
   static batt::StatusOr<PinnedPage> try_pin_impl(PageCacheSlot::AtomicRef& cache_slot_ref,
-                                                 PageId page_id) noexcept;
+                                                 PageId page_id);
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -125,11 +122,12 @@ struct PageIdSlot {
 
   template <typename PinnedPageT>
   batt::StatusOr<PinnedPageT> load_through(BasicPageLoader<PinnedPageT>& loader,
-                                           const Optional<PageLayoutId>& required_layout,
-                                           PinPageToJob pin_page_to_job,
-                                           OkIfNotFound ok_if_not_found) const noexcept;
+                                           const PageLoadOptions& load_options) const;
 
-  batt::StatusOr<PinnedPage> try_pin() const noexcept;
+  batt::StatusOr<PinnedPage> try_pin_through(BasicPageLoader<PinnedPage>& loader,
+                                             const PageLoadOptions& load_options) const;
+
+  batt::StatusOr<PinnedPage> try_pin() const;
 };
 
 //=##=##=#==#=#==#===#+==#+==========+==+=+=+=+=+=++=+++=+++++=-++++=-+++++++++++
@@ -138,11 +136,9 @@ struct PageIdSlot {
 //
 template <typename PinnedPageT>
 inline batt::StatusOr<PinnedPageT> PageIdSlot::load_through(
-    BasicPageLoader<PinnedPageT>& loader, const Optional<PageLayoutId>& required_layout,
-    PinPageToJob pin_page_to_job, OkIfNotFound ok_if_not_found) const noexcept
+    BasicPageLoader<PinnedPageT>& loader, const PageLoadOptions& load_options) const
 {
-  return Self::load_through_impl(this->cache_slot_ref, loader, required_layout, pin_page_to_job,
-                                 ok_if_not_found, this->page_id);
+  return Self::load_through_impl(this->cache_slot_ref, loader, this->page_id, load_options);
 }
 
 }  // namespace llfs

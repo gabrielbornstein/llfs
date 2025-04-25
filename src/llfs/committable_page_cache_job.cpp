@@ -363,7 +363,7 @@ Status CommittablePageCacheJob::WriteNewPagesContext::start()
       BATT_CHECK_EQ(page_id, new_page_view->page_id());
 
       Optional<PinnedPage> pinned_page = this->job->get_already_pinned(page_id);
-      BATT_CHECK(pinned_page != None) << BATT_INSPECT(page_id);
+      BATT_CHECK_NE(pinned_page, None) << BATT_INSPECT(page_id);
 
       // Finalize the client uuid and slot that uniquely identifies this transaction, so we can
       // guarantee exactly-once side effects in the presence of crashes.

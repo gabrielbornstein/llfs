@@ -71,7 +71,7 @@ class PageView
 
   PageId page_id() const noexcept
   {
-    return this->data_->page_id();
+    return get_page_id(this->data_);
   }
 
   std::shared_ptr<const PageBuffer> data() const noexcept
@@ -84,9 +84,14 @@ class PageView
     return *this->data_;
   }
 
+  PageSize page_size() const
+  {
+    return get_page_size(this->data_);
+  }
+
   ConstBuffer const_buffer() const noexcept
   {
-    return this->data_->const_buffer();
+    return get_const_buffer(this->data_);
   }
 
   ConstBuffer const_payload() const noexcept

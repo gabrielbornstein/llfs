@@ -26,10 +26,51 @@ namespace llfs {
 class IoRingPageFileDevice : public PageDevice
 {
  public:
+  struct PhysicalLayout {
+    using Self = PhysicalLayout;
+
+    static Self from_packed_config(const FileOffsetPtr<PackedPageDeviceConfig>& config);
+
+    //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+    PageSize page_size;
+    PageCount page_count;
+    FileOffset page_0_offset;
+    u16 page_size_log2;
+  };
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
   explicit IoRingPageFileDevice(IoRing::File&& file,
                                 const FileOffsetPtr<PackedPageDeviceConfig>& config) noexcept;
 
+  /** \brief Creates a read-only view of the page device; the constructed object does *not* own the
+   * passed file, so the caller must make sure the file lives at least as long as `this`.
+   */
+  explicit IoRingPageFileDevice(page_device_id_int device_id, IoRing::File* file,
+                                const PhysicalLayout& physical_layout) noexcept;
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  IoRing::File& file()
+  {
+    return this->file_;
+  }
+
+  const PhysicalLayout& layout() const
+  {
+    return this->physical_layout_;
+  }
+
+  std::unique_ptr<IoRingPageFileDevice> make_sharded_view(page_device_id_int device_id,
+                                                          PageSize shard_size);
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  IoRingPageFileDevice* as_io_ring_page_file_device() override
+  {
+    return this;
+  }
 
   PageIdFactory page_ids() override;
 
@@ -57,13 +98,20 @@ class IoRingPageFileDevice : public PageDevice
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
+  const bool is_read_only_;
+  const bool is_sharded_view_;
+
   // The backing file for this page device.  Could be a flat file or a raw block device.
   //
-  IoRing::File file_;
+  Optional<IoRing::File> owned_file_;
 
-  // The config for this device.
+  // Access to the file is done via this reference.
   //
-  FileOffsetPtr<PackedPageDeviceConfig> config_;
+  IoRing::File& file_;
+
+  // The layout for this device.
+  //
+  PhysicalLayout physical_layout_;
 
   // Used to construct and parse PageIds for this device.
   //

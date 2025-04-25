@@ -15,9 +15,23 @@
 
 namespace llfs {
 
+namespace {
+
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-/*static*/ usize PageCacheSlot::Pool::default_eviction_candidate_count() noexcept
+usize default_background_thread_count()
+{
+  static const usize value_ =
+      batt::getenv_as<usize>("LLFS_CACHE_BACKGROUND_EVICTION_THREADS").value_or(1);
+
+  return value_;
+}
+
+}  //namespace
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+/*static*/ usize PageCacheSlot::Pool::default_eviction_candidate_count()
 {
   static const usize value_ = batt::getenv_as<usize>("LLFS_CACHE_EVICTION_CANDIDATES")
                                   .value_or(Self::kDefaultEvictionCandidates);
@@ -27,41 +41,88 @@ namespace llfs {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-/*explicit*/ PageCacheSlot::Pool::Pool(usize n_slots, std::string&& name,
-                                       Optional<usize> eviction_candidates) noexcept
+/*static*/ auto PageCacheSlot::Pool::Metrics::instance() -> Metrics&
+{
+  static Metrics metrics_;
+
+  [[maybe_unused]] static bool registered_ = [] {
+    const auto metric_name = [](std::string_view property) {
+      return batt::to_string("PageCacheSlot_Pool_", property);
+    };
+
+#define ADD_METRIC_(n) global_metric_registry().add(metric_name(#n), metrics_.n)
+
+    ADD_METRIC_(indexed_slots);
+    ADD_METRIC_(query_count);
+    ADD_METRIC_(hit_count);
+    ADD_METRIC_(stale_count);
+    ADD_METRIC_(alloc_count);
+    ADD_METRIC_(evict_count);
+    ADD_METRIC_(evict_prior_generation_count);
+    ADD_METRIC_(insert_count);
+    ADD_METRIC_(erase_count);
+    ADD_METRIC_(full_count);
+    ADD_METRIC_(admit_byte_count);
+    ADD_METRIC_(evict_byte_count);
+    ADD_METRIC_(background_evict_count);
+    ADD_METRIC_(background_evict_byte_count);
+
+#undef ADD_METRIC_
+
+    return true;
+  }();
+
+#if 0  // TODO [tastolfi 2025-04-21]
+  global_metric_registry()
+      .remove(this->metrics_.indexed_slots)
+      .remove(this->metrics_.query_count)
+      .remove(this->metrics_.hit_count)
+      .remove(this->metrics_.stale_count)
+      .remove(this->metrics_.alloc_count)
+      .remove(this->metrics_.evict_count)
+      .remove(this->metrics_.evict_prior_generation_count)
+      .remove(this->metrics_.insert_count)
+      .remove(this->metrics_.erase_count)
+      .remove(this->metrics_.full_count)
+      .remove(this->metrics_.admit_byte_count)
+      .remove(this->metrics_.evict_byte_count)
+      .remove(this->metrics_.background_evict_count)
+      .remove(this->metrics_.background_evict_byte_count);
+#endif
+
+  return metrics_;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+/*explicit*/ PageCacheSlot::Pool::Pool(SlotCount n_slots, MaxCacheSizeBytes max_byte_size,
+                                       std::string&& name,
+                                       Optional<SlotCount> eviction_candidates) noexcept
     : n_slots_{n_slots}
+    , max_byte_size_{max_byte_size}
     , eviction_candidates_{std::min<usize>(
           n_slots, std::max<usize>(
                        2, eviction_candidates.value_or(Self::default_eviction_candidate_count())))}
     , name_{std::move(name)}
     , slot_storage_{new SlotStorage[n_slots]}
 {
-  this->metrics_.max_slots.set(n_slots);
+  this->metrics_.total_capacity_allocated.add(this->max_byte_size_);
 
-  const auto metric_name = [this](std::string_view property) {
-    return batt::to_string("Cache_", this->name_, "_", property);
-  };
-
-#define ADD_METRIC_(n) global_metric_registry().add(metric_name(#n), this->metrics_.n)
-
-  ADD_METRIC_(max_slots);
-  ADD_METRIC_(indexed_slots);
-  ADD_METRIC_(query_count);
-  ADD_METRIC_(hit_count);
-  ADD_METRIC_(stale_count);
-  ADD_METRIC_(alloc_count);
-  ADD_METRIC_(evict_count);
-  ADD_METRIC_(insert_count);
-  ADD_METRIC_(erase_count);
-  ADD_METRIC_(full_count);
-
-#undef ADD_METRIC_
+  const usize n_threads = default_background_thread_count();
+  for (usize i = 0; i < n_threads; ++i) {
+    this->background_eviction_threads_.emplace_back([this] {
+      this->background_eviction_thread_main();
+    });
+  }
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 PageCacheSlot::Pool::~Pool() noexcept
 {
+  this->halt();
+  this->join();
+
   if (this->slot_storage_) {
     const usize n_to_delete = this->n_constructed_.get_value();
     BATT_CHECK_EQ(n_to_delete, this->n_allocated_.load());
@@ -74,24 +135,32 @@ PageCacheSlot::Pool::~Pool() noexcept
     }
   }
 
-  global_metric_registry()
-      .remove(this->metrics_.max_slots)
-      .remove(this->metrics_.indexed_slots)
-      .remove(this->metrics_.query_count)
-      .remove(this->metrics_.hit_count)
-      .remove(this->metrics_.stale_count)
-      .remove(this->metrics_.alloc_count)
-      .remove(this->metrics_.evict_count)
-      .remove(this->metrics_.insert_count)
-      .remove(this->metrics_.erase_count)
-      .remove(this->metrics_.full_count);
+  this->metrics_.total_capacity_freed.add(this->max_byte_size_);
 
   LLFS_VLOG(1) << "PageCacheSlot::Pool::~Pool()";
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-PageCacheSlot* PageCacheSlot::Pool::get_slot(usize i) noexcept
+void PageCacheSlot::Pool::halt()
+{
+  this->halt_requested_.store(true);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void PageCacheSlot::Pool::join()
+{
+  std::unique_lock<std::mutex> lock{this->background_threads_mutex_};
+  for (std::thread& t : this->background_eviction_threads_) {
+    t.join();
+  }
+  this->background_eviction_threads_.clear();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+PageCacheSlot* PageCacheSlot::Pool::get_slot(usize i)
 {
   BATT_CHECK_LT(i, this->n_slots_);
 
@@ -100,7 +169,7 @@ PageCacheSlot* PageCacheSlot::Pool::get_slot(usize i) noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-PageCacheSlot* PageCacheSlot::Pool::allocate() noexcept
+PageCacheSlot* PageCacheSlot::Pool::allocate()
 {
   if (this->n_allocated_.load() < this->n_slots_) {
     const usize allocated_i = this->n_allocated_.fetch_add(1);
@@ -124,7 +193,7 @@ PageCacheSlot* PageCacheSlot::Pool::allocate() noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-usize PageCacheSlot::Pool::index_of(const PageCacheSlot* slot) noexcept
+usize PageCacheSlot::Pool::index_of(const PageCacheSlot* slot)
 {
   BATT_CHECK_NOT_NULLPTR(slot);
   BATT_CHECK_EQ(std::addressof(slot->pool()), this);
@@ -138,7 +207,7 @@ usize PageCacheSlot::Pool::index_of(const PageCacheSlot* slot) noexcept
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-batt::CpuCacheLineIsolated<PageCacheSlot>* PageCacheSlot::Pool::slots() noexcept
+batt::CpuCacheLineIsolated<PageCacheSlot>* PageCacheSlot::Pool::slots()
 {
   return reinterpret_cast<batt::CpuCacheLineIsolated<PageCacheSlot>*>(this->slot_storage_.get());
 }
@@ -187,8 +256,8 @@ PageCacheSlot* PageCacheSlot::Pool::evict_lru()
       return second_slot;
     }();
 
-    // Pick more random slots (with replacement, since we already have >= 2) to try to get a better
-    // (older) last-usage LTS.
+    // Pick more random slots (with replacement, since we already have >= 2) to try to get a
+    // better (older) last-usage LTS.
     //
     for (usize k = 2; k < this->eviction_candidates_; ++k) {
       usize nth_slot_i = pick_first_slot(rng);
@@ -204,12 +273,98 @@ PageCacheSlot* PageCacheSlot::Pool::evict_lru()
     // Fingers crossed!
     //
     if (lru_slot->evict()) {
-      this->metrics_.evict_count.add(1);
       return lru_slot;
     }
   }
 
   return nullptr;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+usize PageCacheSlot::Pool::clear_all()
+{
+  usize success_count = 0;
+  usize n_slots = this->n_constructed_.get_value();
+
+  usize slot_i = 0;
+  for (usize n_tries = 0; n_tries < 4; ++n_tries) {
+    for (; slot_i < n_slots; ++slot_i) {
+      PageCacheSlot* slot = this->get_slot(slot_i);
+      if (slot->evict()) {
+        ++success_count;
+        slot->clear();
+      }
+    }
+    if (n_slots == this->n_constructed_.get_value()) {
+      break;
+    }
+    n_slots = this->n_constructed_.get_value();
+    if (n_tries == 2) {
+      slot_i = 0;
+    }
+  }
+
+  return success_count;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void PageCacheSlot::Pool::background_eviction_thread_main()
+{
+  Status status = [this]() -> Status {
+    std::default_random_engine rng{std::random_device{}()};
+
+    std::uniform_int_distribution<i64> pick_delay_usec{500, 750};
+
+    while (!this->halt_requested_) {
+      {
+        const i64 delay_usec = pick_delay_usec(rng);
+        std::this_thread::sleep_for(std::chrono::microseconds(delay_usec));
+
+        if (this->halt_requested_) {
+          break;
+        }
+      }
+
+      i64 evict_count = 0;
+      i64 evict_byte_count = 0;
+      i64 estimated_cache_bytes = this->metrics_.estimate_cache_bytes();
+      i64 global_target = this->metrics_.estimate_total_limit();
+
+      while (global_target > 0 && estimated_cache_bytes > global_target) {
+        PageCacheSlot* slot = this->evict_lru();
+        if (!slot) {
+          if (this->halt_requested_) {
+            break;
+          }
+          std::this_thread::yield();
+          continue;
+        }
+        const i64 slot_page_size = slot->get_page_size_while_invalid();
+        estimated_cache_bytes -= slot_page_size;
+        evict_count += 1;
+        evict_byte_count += slot_page_size;
+        slot->clear();
+
+        if ((evict_count & 0x3f) == 0 && this->halt_requested_) {
+          break;
+        }
+      }
+
+      this->metrics_.background_evict_count.add(evict_count);
+      this->metrics_.background_evict_byte_count.add(evict_byte_count);
+    }
+
+    return OkStatus();
+  }();
+
+  if (!status.ok() && !this->halt_requested_) {
+    LLFS_LOG_INFO() << "PageCacheSlot::Pool::background_eviction_thread exited unexpectedly: "
+                    << status;
+  } else {
+    LLFS_VLOG(1) << "PageCacheSlot::Pool::background_eviction_thread exited normally: " << status;
+  }
 }
 
 }  //namespace llfs

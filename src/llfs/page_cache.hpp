@@ -139,9 +139,16 @@ class PageCache : public PageLoader
 
   const PageCacheOptions& options() const;
 
+  PageCache* page_cache() const override
+  {
+    return const_cast<PageCache*>(this);
+  }
+
   Status assign_filter_device(PageSize src_page_size, PageSize filter_page_size) noexcept;
 
   Optional<PageId> filter_page_id_for(PageId page_id) const;
+
+  Optional<PageId> page_shard_id_for(PageId full_page_id, const Interval<usize>& shard_range);
 
   /** \brief DEPRECATED - use register_page_reader.
    */
@@ -192,32 +199,27 @@ class PageCache : public PageLoader
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
   // PageLoader interface
   //
-  using PageLoader::get_page;
-  using PageLoader::get_page_in_job;
-  using PageLoader::get_page_slot;
-  using PageLoader::get_page_slot_in_job;
-  using PageLoader::get_page_slot_with_layout;
-  using PageLoader::get_page_slot_with_layout_in_job;
-  using PageLoader::get_page_with_layout;
 
   // Gives a hint to the cache to fetch the pages for the given ids in the background because we are
   // going to need them soon.
   //
   void prefetch_hint(PageId page_id) override;
 
+  // Attempt to pin the page without loading it.
+  //
+  StatusOr<PinnedPage> try_pin_cached_page(PageId page_id, const PageLoadOptions& options) override;
+
   // Loads the specified page or retrieves from cache.
   //
-  StatusOr<PinnedPage> get_page_with_layout_in_job(PageId page_id,
-                                                   const Optional<PageLayoutId>& required_layout,
-                                                   PinPageToJob pin_page_to_job,
-                                                   OkIfNotFound ok_if_not_found) override;
+  StatusOr<PinnedPage> load_page(PageId page_id, const PageLoadOptions& options) override;
   //
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 
   //----- --- -- -  -  -   -
   /** \brief Inserts a newly built PageView into the cache.
    */
-  StatusOr<PinnedPage> put_view(std::shared_ptr<const PageView>&& view, u64 callers, u64 job_id);
+  StatusOr<PinnedPage> put_view(std::shared_ptr<const PageView>&& view, LruPriority lru_priority,
+                                u64 callers, u64 job_id);
 
   //----- --- -- -  -  -   -
   /** \brief Removes all cached data for the specified page.
@@ -235,6 +237,17 @@ class PageCache : public PageLoader
     return this->metrics_;
   }
 
+  const PageCacheSlot::Pool::Metrics& slot_pool_metrics() const
+  {
+    return this->cache_slot_pool_->metrics();
+  }
+
+  usize clear_all_slots()
+  {
+    return this->cache_slot_pool_->clear_all();
+  }
+
+#if 0
   const PageCacheSlot::Pool::Metrics& metrics_for_page_size(PageSize page_size) const
   {
     const i32 page_size_log2 = batt::log2_ceil(page_size);
@@ -246,6 +259,7 @@ class PageCache : public PageLoader
 
     return this->cache_slot_pool_by_page_size_log2_[page_size_log2]->metrics();
   }
+#endif
 
   /** \brief Returns the PageDeviceEntry for the device that owns the given page.
    *
@@ -283,8 +297,8 @@ class PageCache : public PageLoader
    * \param ok_if_not_found Controls whether page-not-found log messages (WARNING) are emitted if
    * the page isn't found; ok_if_not_found == false -> emit log warnings, ... == true -> don't
    */
-  batt::StatusOr<PageCacheSlot::PinnedRef> find_page_in_cache(
-      PageId page_id, const Optional<PageLayoutId>& required_layout, OkIfNotFound ok_if_not_found);
+  batt::StatusOr<PageCacheSlot::PinnedRef> find_page_in_cache(PageId page_id,
+                                                              const PageLoadOptions& options);
 
   //----- --- -- -  -  -   -
   /** \brief Populates the passed PageCacheSlot asynchronously by attempting to read the page from
@@ -324,10 +338,16 @@ class PageCache : public PageLoader
   //
   std::array<Slice<PageDeviceEntry* const>, kMaxPageSizeLog2> page_devices_by_page_size_log2_;
 
+  // The pool of cache slots.
+  //
+  boost::intrusive_ptr<PageCacheSlot::Pool> cache_slot_pool_;
+
+#if 0
   // A pool of cache slots for each page size.
   //
   std::array<boost::intrusive_ptr<PageCacheSlot::Pool>, kMaxPageSizeLog2>
       cache_slot_pool_by_page_size_log2_;
+#endif
 
   // A thread-safe shared map from PageLayoutId to PageReader function; layouts must be registered
   // with the PageCache so that we trace references during page recycling (aka garbage collection).

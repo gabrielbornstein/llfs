@@ -34,7 +34,9 @@ batt::SharedPtr<PageCache> make_memory_page_cache(
     arenas.emplace_back(make_memory_page_arena(
         scheduler, count, size, batt::to_string("Arena", device_id, "_", size), device_id));
     device_id += 1;
+#if 0
     cache_options.set_max_cached_pages_per_size(size, count);
+#endif
   }
 
   return BATT_OK_RESULT_OR_PANIC(PageCache::make_shared(

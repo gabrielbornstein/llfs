@@ -16,7 +16,11 @@
 namespace llfs {
 
 struct PageCacheMetrics {
-  FastCountMetric<int> get_count{0};
+  FastCountMetric<int>& get_count = []() -> FastCountMetric<int>& {
+    static FastCountMetric<int> get_count_;
+    return get_count_;
+  }();
+
   CountMetric<int> get_page_view_count{0};
   CountMetric<int> get_read_count{0};
   CountMetric<u64> total_bytes_written{0};

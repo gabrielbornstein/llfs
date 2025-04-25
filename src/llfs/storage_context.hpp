@@ -74,7 +74,13 @@ class StorageContext : public batt::RefCounted<StorageContext>
     return *this->io_ring_;
   }
 
-  /*! \brief Set runtime options for PageCache.
+  boost::intrusive_ptr<StorageContext> shared_from_this()
+  {
+    BATT_CHECK_NE(this->use_count(), 0);
+    return boost::intrusive_ptr<StorageContext>{this};
+  }
+
+  /** \brief Set runtime options for PageCache.
    */
   void set_page_cache_options(const PageCacheOptions& options);
 

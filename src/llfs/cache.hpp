@@ -32,6 +32,7 @@
 #include <memory>
 
 namespace llfs {
+namespace deprecated {
 
 using CacheLRUHook = boost::intrusive::list_base_hook<boost::intrusive::tag<struct CacheLRUTag>>;
 
@@ -1019,6 +1020,7 @@ inline bool operator==(const PinnedCacheSlot<K, V>& l, const PinnedCacheSlot<K, 
   return l.slot() == r.slot() && l.get() == r.get();
 }
 
+}  //namespace deprecated
 }  // namespace llfs
 
 #endif  // LLFS_CACHE_HPP

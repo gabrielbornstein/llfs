@@ -124,6 +124,7 @@ class BPTrie
       , root_{make_trie(keys, this->nodes_)}
       , size_{std::size(keys)}
   {
+    BATT_CHECK_NOT_NULLPTR(this->root_);
     BATT_CHECK_EQ(this->root_->subtree_node_count_, this->nodes_.size());
   }
 

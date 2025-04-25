@@ -14,6 +14,8 @@
 #include <llfs/page_arena.hpp>
 #include <llfs/page_device_cache.hpp>
 
+#include <batteries/math.hpp>
+
 namespace llfs {
 
 /** \brief All the per-PageDevice state for a single device in the storage pool.
@@ -24,7 +26,9 @@ struct PageDeviceEntry {
       : arena{std::move(arena)}
       , cache{this->arena.device().page_ids(), std::move(slot_pool)}
       , no_outgoing_refs_cache{this->arena.device().page_ids()}
+      , page_size_log2{batt::log2_ceil(get_page_size(this->arena))}
   {
+    this->sharded_views.fill(nullptr);
   }
 
   /** \brief The PageDevice and PageAllocator.
@@ -45,6 +49,10 @@ struct PageDeviceEntry {
    */
   NoOutgoingRefsCache no_outgoing_refs_cache;
 
+  i32 page_size_log2;
+
+  page_device_id_int device_id_shifted = (this->arena.id() << kPageIdDeviceShift);
+
   PageDeviceEntry* is_filter_device_for = nullptr;
 
   page_device_id_int is_filter_device_for_id = 0;
@@ -52,6 +60,15 @@ struct PageDeviceEntry {
   PageDeviceEntry* filter_device_entry = nullptr;
 
   page_device_id_int filter_device_id = 0;
+
+  std::array<PageDeviceEntry*, 32> sharded_views;
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  PageSize page_size() const
+  {
+    return PageSize{u32{1} << this->page_size_log2};
+  }
 };
 
 }  // namespace llfs

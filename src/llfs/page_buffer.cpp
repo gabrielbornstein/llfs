@@ -112,18 +112,18 @@ void PageBuffer::set_page_id(PageId id)
 
   obj->set_page_id(page_id);
 
-  return std::shared_ptr<PageBuffer>{obj};
+  return std::shared_ptr<PageBuffer>{obj, PageBufferDeleter{page_size, page_id}};
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-void PageBuffer::operator delete(void* ptr)
+/*static*/ void PageBuffer::deallocate(PageSize page_size, void* ptr)
 {
   if (kEnablePageBufferPool) {
     PageBuffer* obj = reinterpret_cast<PageBuffer*>(ptr);
     if (obj) {
-      const usize page_size = obj->size();
       auto& pool = pool_for_size(page_size);
+      mutable_page_header(obj)->size = page_size;
       if (pool.arena.push(obj)) {
         pool.size.fetch_add(1);
         return;

@@ -24,10 +24,10 @@ class CallerPromisesTheyAcquiredPinCount
   // a cache slot and using it to create a PinnedRef!
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  friend auto PageCacheSlot::acquire_pin(PageId key,
-                                         bool ignore_key) noexcept -> PageCacheSlot::PinnedRef;
+  friend auto PageCacheSlot::acquire_pin(PageId key, bool ignore_key) -> PageCacheSlot::PinnedRef;
 
-  friend auto PageCacheSlot::fill(PageId key) noexcept -> PageCacheSlot::PinnedRef;
+  friend auto PageCacheSlot::fill(PageId key, PageSize page_size, i64 lru_priority)
+      -> PageCacheSlot::PinnedRef;
 };
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
