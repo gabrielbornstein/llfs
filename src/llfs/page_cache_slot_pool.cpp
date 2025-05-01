@@ -315,7 +315,12 @@ void PageCacheSlot::Pool::background_eviction_thread_main()
   Status status = [this]() -> Status {
     std::default_random_engine rng{std::random_device{}()};
 
-    std::uniform_int_distribution<i64> pick_delay_usec{500, 750};
+    const i64 n_threads = std::max<i64>(1, default_background_thread_count());
+
+    constexpr i64 kMinDelayUsec = 500;
+    constexpr i64 kMaxDelayUsec = 750;
+
+    std::uniform_int_distribution<i64> pick_delay_usec{kMinDelayUsec, kMaxDelayUsec * n_threads};
 
     while (!this->halt_requested_) {
       {
@@ -332,12 +337,22 @@ void PageCacheSlot::Pool::background_eviction_thread_main()
       i64 estimated_cache_bytes = this->metrics_.estimate_cache_bytes();
       i64 global_target = this->metrics_.estimate_total_limit();
 
+      auto update_eviction_metrics = [&] {
+        this->metrics_.background_evict_count.add(evict_count);
+        this->metrics_.background_evict_byte_count.add(evict_byte_count);
+        evict_count = 0;
+        evict_byte_count = 0;
+        estimated_cache_bytes = this->metrics_.estimate_cache_bytes();
+        global_target = this->metrics_.estimate_total_limit();
+      };
+
       while (global_target > 0 && estimated_cache_bytes > global_target) {
         PageCacheSlot* slot = this->evict_lru();
         if (!slot) {
           if (this->halt_requested_) {
             break;
           }
+          update_eviction_metrics();
           std::this_thread::yield();
           continue;
         }
@@ -347,13 +362,15 @@ void PageCacheSlot::Pool::background_eviction_thread_main()
         evict_byte_count += slot_page_size;
         slot->clear();
 
-        if ((evict_count & 0x3f) == 0 && this->halt_requested_) {
-          break;
+        if ((evict_count & 0x7f) == 0) {
+          update_eviction_metrics();
+          if (this->halt_requested_) {
+            break;
+          }
         }
       }
 
-      this->metrics_.background_evict_count.add(evict_count);
-      this->metrics_.background_evict_byte_count.add(evict_byte_count);
+      update_eviction_metrics();
     }
 
     return OkStatus();
