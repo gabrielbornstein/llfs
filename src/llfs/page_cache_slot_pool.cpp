@@ -214,66 +214,102 @@ batt::CpuCacheLineIsolated<PageCacheSlot>* PageCacheSlot::Pool::slots()
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-PageCacheSlot* PageCacheSlot::Pool::evict_lru()
+template <typename Fn /*=void(PageCacheSlot*)*/>
+void PageCacheSlot::Pool::pick_k_random_slots(usize k, Fn&& fn)
 {
-  thread_local std::default_random_engine rng{/*seed=*/std::random_device{}()};
+  if (k == 0) {
+    return;
+  }
 
   const usize n_slots = this->n_constructed_.get_value();
 
-  if (n_slots == 0) {
-    return nullptr;
-  }
-
-  if (n_slots == 1) {
-    PageCacheSlot* only_slot = this->get_slot(0);
-    if (only_slot->evict()) {
-      return only_slot;
+  if (k >= n_slots) {
+    for (usize i = 0; i < n_slots; ++i) {
+      fn(this->get_slot(i));
     }
-    return nullptr;
+    return;
   }
 
-  // Pick k slots at random and try to evict whichever one has the least (earliest) latest use
-  // logical time stamp.
-  //
+  //----- --- -- -  -  -   -
+  thread_local std::default_random_engine rng{/*seed=*/std::random_device{}()};
+  //----- --- -- -  -  -   -
+
   std::uniform_int_distribution<usize> pick_first_slot{0, n_slots - 1};
+  const usize first_slot_i = pick_first_slot(rng);
+  fn(this->get_slot(first_slot_i));
+  if (k == 1) {
+    return;
+  }
+
   std::uniform_int_distribution<usize> pick_second_slot{0, n_slots - 2};
+  usize second_slot_i = pick_second_slot(rng);
+  if (second_slot_i >= first_slot_i) {
+    ++second_slot_i;
+  }
+  BATT_CHECK_NE(first_slot_i, second_slot_i);
+  fn(this->get_slot(second_slot_i));
 
-  for (usize attempts = 0; attempts < n_slots; ++attempts) {
-    usize first_slot_i = pick_first_slot(rng);
-    usize second_slot_i = pick_second_slot(rng);
+  // Once we have at least two unique slots, switch to selection-with-replacement
+  // for speed.
+  //
+  for (usize i = 2; i < k; ++i) {
+    fn(this->get_slot(pick_first_slot(rng)));
+  }
+}
 
-    if (second_slot_i >= first_slot_i) {
-      ++second_slot_i;
-    }
-    BATT_CHECK_NE(first_slot_i, second_slot_i);
+namespace {
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+struct SlotWithLatestUse {
+  PageCacheSlot* slot;
+  i64 latest_use;
+};
 
-    PageCacheSlot* first_slot = this->get_slot(first_slot_i);
-    PageCacheSlot* second_slot = this->get_slot(second_slot_i);
-    PageCacheSlot* lru_slot = [&] {
-      if (first_slot->get_latest_use() - second_slot->get_latest_use() < 0) {
-        return first_slot;
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+struct LruSlotOrder {
+  bool operator()(const SlotWithLatestUse& left, const SlotWithLatestUse& right) const
+  {
+    return (left.latest_use - right.latest_use) < 0;
+  }
+};
+
+}  //namespace
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+PageCacheSlot* PageCacheSlot::Pool::evict_lru()
+{
+  this->metrics_.evict_lru_count.add(1);
+
+  batt::SmallVec<SlotWithLatestUse, 8> candidates;
+
+  for (usize attempts = 0; attempts < this->n_constructed_.get_value(); ++attempts) {
+    // Select `k` random slots, then try to evict the least recently used among these.
+    //
+    candidates.clear();
+    this->pick_k_random_slots(this->eviction_candidates_, [&](PageCacheSlot* slot) {
+      candidates.emplace_back(SlotWithLatestUse{
+          .slot = slot,
+          .latest_use = slot->get_latest_use(),
+      });
+    });
+
+    // Sort from least recently used to most recently used.
+    //
+    std::sort(candidates.begin(), candidates.end(), LruSlotOrder{});
+
+    // Only consider the least recently used half of the collected candidates.
+    //
+    const usize half_size = (candidates.size() + 1) / 2;
+    candidates.resize(half_size);
+
+    // Try to find an evictable candidate; stop as soon as we succeed.
+    //
+    for (const SlotWithLatestUse& slu : candidates) {
+      if (slu.slot->evict()) {
+        return slu.slot;
       }
-      return second_slot;
-    }();
-
-    // Pick more random slots (with replacement, since we already have >= 2) to try to get a
-    // better (older) last-usage LTS.
-    //
-    for (usize k = 2; k < this->eviction_candidates_; ++k) {
-      usize nth_slot_i = pick_first_slot(rng);
-      PageCacheSlot* nth_slot = this->get_slot(nth_slot_i);
-      lru_slot = [&] {
-        if (nth_slot->get_latest_use() - lru_slot->get_latest_use() < 0) {
-          return nth_slot;
-        }
-        return lru_slot;
-      }();
-    }
-
-    // Fingers crossed!
-    //
-    if (lru_slot->evict()) {
-      return lru_slot;
     }
   }
 
@@ -322,6 +358,8 @@ void PageCacheSlot::Pool::background_eviction_thread_main()
 
     std::uniform_int_distribution<i64> pick_delay_usec{kMinDelayUsec, kMaxDelayUsec * n_threads};
 
+    std::vector<SlotWithLatestUse> candidates;
+
     while (!this->halt_requested_) {
       {
         const i64 delay_usec = pick_delay_usec(rng);
@@ -336,41 +374,69 @@ void PageCacheSlot::Pool::background_eviction_thread_main()
       i64 evict_byte_count = 0;
       i64 estimated_cache_bytes = this->metrics_.estimate_cache_bytes();
       i64 global_target = this->metrics_.estimate_total_limit();
+      auto start_time = std::chrono::steady_clock::now();
 
       auto update_eviction_metrics = [&] {
         this->metrics_.background_evict_count.add(evict_count);
         this->metrics_.background_evict_byte_count.add(evict_byte_count);
+        this->metrics_.background_evict_latency.update(start_time, evict_count);
+        this->metrics_.background_evict_byte_latency.update(start_time, evict_byte_count);
         evict_count = 0;
         evict_byte_count = 0;
+        start_time = std::chrono::steady_clock::now();
         estimated_cache_bytes = this->metrics_.estimate_cache_bytes();
         global_target = this->metrics_.estimate_total_limit();
       };
 
-      while (global_target > 0 && estimated_cache_bytes > global_target) {
-        PageCacheSlot* slot = this->evict_lru();
-        if (!slot) {
-          if (this->halt_requested_) {
-            break;
-          }
-          update_eviction_metrics();
-          std::this_thread::yield();
-          continue;
-        }
-        const i64 slot_page_size = slot->get_page_size_while_invalid();
-        estimated_cache_bytes -= slot_page_size;
-        evict_count += 1;
-        evict_byte_count += slot_page_size;
-        slot->clear();
+      while (global_target > 0 && estimated_cache_bytes > global_target && !this->halt_requested_) {
+        const usize n_candidates =
+            std::min<usize>(256, ((estimated_cache_bytes - global_target + 4095) / 4096) * 2);
 
-        if ((evict_count & 0x7f) == 0) {
-          update_eviction_metrics();
-          if (this->halt_requested_) {
-            break;
+        candidates.clear();
+        this->pick_k_random_slots(n_candidates, [&candidates](PageCacheSlot* slot) {
+          candidates.emplace_back(SlotWithLatestUse{
+              .slot = slot,
+              .latest_use = slot->get_latest_use(),
+          });
+        });
+
+        // Sort from least recently used to most recently used.
+        //
+        std::sort(candidates.begin(), candidates.end(), LruSlotOrder{});
+
+        // Only consider the least recently used half of the collected candidates.
+        //
+        const usize half_size = (candidates.size() + 1) / 2;
+        candidates.resize(half_size);
+
+        // Try to find an evictable candidate; stop as soon as we succeed.
+        //
+        for (const SlotWithLatestUse& slu : candidates) {
+          if (!slu.slot->evict()) {
+            if (this->halt_requested_) {
+              break;
+            }
+            update_eviction_metrics();
+            std::this_thread::yield();
+            continue;
+          }
+
+          const i64 slot_page_size = slu.slot->get_page_size_while_invalid();
+          estimated_cache_bytes -= slot_page_size;
+          evict_count += 1;
+          evict_byte_count += slot_page_size;
+          slu.slot->clear();
+
+          if (estimated_cache_bytes <= global_target) {
+            update_eviction_metrics();
+            if (estimated_cache_bytes <= global_target) {
+              break;
+            }
           }
         }
+
+        update_eviction_metrics();
       }
-
-      update_eviction_metrics();
     }
 
     return OkStatus();

@@ -56,8 +56,12 @@ class PageCacheSlot::Pool : public boost::intrusive_ref_counter<Pool>
     FastCountMetric<i64> erase_byte_count{0};
     FastCountMetric<i64> evict_byte_count{0};
 
+    FastCountMetric<i64> evict_lru_count{0};
+
     CountMetric<i64> background_evict_count{0};
     CountMetric<i64> background_evict_byte_count{0};
+    LatencyMetric background_evict_latency;
+    LatencyMetric background_evict_byte_latency;
 
     CountMetric<i64> total_capacity_allocated{0};
     CountMetric<i64> total_capacity_freed{0};
@@ -175,6 +179,11 @@ class PageCacheSlot::Pool : public boost::intrusive_ref_counter<Pool>
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   batt::CpuCacheLineIsolated<PageCacheSlot>* slots();
+
+  /** \brief Selects `k` allocated slots at random, passing each to `fn`.
+   */
+  template <typename Fn /*=void(PageCacheSlot*)*/>
+  void pick_k_random_slots(usize k, Fn&& fn);
 
   /** \brief Tries to find a slot that hasn't been used in a while to evict.
    *
