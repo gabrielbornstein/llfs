@@ -60,8 +60,8 @@ class LlfsConan(ConanFile):
     ]
 
     tool_requires = [
-        "cmake/[>=3.20.0]",
-        "ninja/1.12.1",
+        "cmake/[>=3.20.0 <4]",
+        "ninja/[>=1.12.1 <2]",
     ]
 
     #+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -75,22 +75,22 @@ class LlfsConan(ConanFile):
 
 
     def requirements(self):
-        self.requires("batteries/0.59.0", **VISIBLE)
-        self.requires("boost/1.85.0", **VISIBLE, **OVERRIDE)
-        self.requires("cli11/2.4.2", **VISIBLE)
-        self.requires("glog/0.7.1", **VISIBLE, **OVERRIDE)
-        self.requires("libbacktrace/cci.20210118", **VISIBLE)
-        self.requires("openssl/3.3.2", **VISIBLE, **OVERRIDE)
-        self.requires("xxhash/0.8.3", **VISIBLE)
+        self.requires("batteries/[>=0.59.0 <1]", **VISIBLE)
+        self.requires("boost/[>=1.85.0 <2]", **VISIBLE, **OVERRIDE)
+        self.requires("cli11/[>=2.4.2 <3]", **VISIBLE)
+        self.requires("glog/[>=0.7.1 <1]", **VISIBLE, **OVERRIDE)
+        self.requires("libbacktrace/[>=cci.20210118]", **VISIBLE)
+        self.requires("openssl/[>=3.3.2 <4]", **VISIBLE, **OVERRIDE)
+        self.requires("xxhash/[>=0.8.3 <1]", **VISIBLE)
 
-        self.requires("zlib/1.3", **OVERRIDE)
+        self.requires("zlib/[>=1.3 <2]", **OVERRIDE)
 
-        self.test_requires("gtest/1.15.0")
+        self.test_requires("gtest/[>=1.15.0 <2]")
         
         if platform.system() == "Linux":
-            self.requires("liburing/2.4", **VISIBLE)
-            self.requires("libfuse/3.16.2", **VISIBLE)
-            self.requires("libunwind/1.7.2", **VISIBLE, **OVERRIDE)
+            self.requires("liburing/[>=2.4 <3]", **VISIBLE)
+            self.requires("libfuse/[>=3.16.2 <4]", **VISIBLE)
+            self.requires("libunwind/[>=1.7.2 <2]", **VISIBLE, **OVERRIDE)
 
     #+++++++++++-+-+--+----- --- -- -  -  -   -
 
