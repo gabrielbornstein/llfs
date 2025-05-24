@@ -353,6 +353,7 @@ void PageCacheSlot::Pool::background_eviction_thread_main()
 
     const i64 n_threads = std::max<i64>(1, default_background_thread_count());
 
+    constexpr usize kMaxCandidates = 65536;
     constexpr i64 kMinDelayUsec = 500;
     constexpr i64 kMaxDelayUsec = 750;
 
@@ -389,8 +390,11 @@ void PageCacheSlot::Pool::background_eviction_thread_main()
       };
 
       while (global_target > 0 && estimated_cache_bytes > global_target && !this->halt_requested_) {
-        const usize n_candidates =
-            std::min<usize>(256, ((estimated_cache_bytes - global_target + 4095) / 4096) * 2);
+        // Pick a number of candidates large enough to cover the gap, assuming 4kb pages; don't
+        // exceed our max.
+        //
+        const usize n_candidates = std::min<usize>(
+            kMaxCandidates, ((estimated_cache_bytes - global_target + 4095) / 4096) * 2);
 
         candidates.clear();
         this->pick_k_random_slots(n_candidates, [&candidates](PageCacheSlot* slot) {
@@ -409,9 +413,11 @@ void PageCacheSlot::Pool::background_eviction_thread_main()
         const usize half_size = (candidates.size() + 1) / 2;
         candidates.resize(half_size);
 
-        // Try to find an evictable candidate; stop as soon as we succeed.
+        // Try to find evictable candidates; stop as soon as the target is reached.
         //
         for (const SlotWithLatestUse& slu : candidates) {
+          // If we fail to evict, then check for halt and yield the thread.
+          //
           if (!slu.slot->evict()) {
             if (this->halt_requested_) {
               break;
