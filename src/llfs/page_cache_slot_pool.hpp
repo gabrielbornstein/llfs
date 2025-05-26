@@ -184,7 +184,7 @@ class PageCacheSlot::Pool : public boost::intrusive_ref_counter<Pool>
   /** \brief Selects `k` allocated slots at random, passing each to `fn`.
    */
   template <typename Fn /*=void(PageCacheSlot*)*/>
-  void pick_k_random_slots(usize k, Fn&& fn);
+  void pick_k_random_slots(usize k, Fn&& fn, usize shard_i = 0, usize n_shards = 1);
 
   /** \brief Tries to find a slot that hasn't been used in a while to evict.
    *
@@ -199,7 +199,7 @@ class PageCacheSlot::Pool : public boost::intrusive_ref_counter<Pool>
    * this->metrics_.admit_byte_count and this->metrics_.evict_byte_count has become too large.  If
    * so, continues to call evict_lru until the problem has been corrected.
    */
-  void background_eviction_thread_main();
+  void background_eviction_thread_main(usize thread_i, usize n_threads);
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 

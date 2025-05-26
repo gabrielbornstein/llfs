@@ -110,8 +110,8 @@ usize default_background_thread_count()
 
   const usize n_threads = default_background_thread_count();
   for (usize i = 0; i < n_threads; ++i) {
-    this->background_eviction_threads_.emplace_back([this] {
-      this->background_eviction_thread_main();
+    this->background_eviction_threads_.emplace_back([this, thread_i = i, n_threads] {
+      this->background_eviction_thread_main(thread_i, n_threads);
     });
   }
 }
@@ -215,17 +215,17 @@ batt::CpuCacheLineIsolated<PageCacheSlot>* PageCacheSlot::Pool::slots()
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 template <typename Fn /*=void(PageCacheSlot*)*/>
-void PageCacheSlot::Pool::pick_k_random_slots(usize k, Fn&& fn)
+void PageCacheSlot::Pool::pick_k_random_slots(usize k, Fn&& fn, usize shard_i, usize n_shards)
 {
   if (k == 0) {
     return;
   }
 
-  const usize n_slots = this->n_constructed_.get_value();
+  const usize n_slots = this->n_constructed_.get_value() / n_shards;
 
   if (k >= n_slots) {
     for (usize i = 0; i < n_slots; ++i) {
-      fn(this->get_slot(i));
+      fn(this->get_slot(i * n_shards + shard_i));
     }
     return;
   }
@@ -235,16 +235,16 @@ void PageCacheSlot::Pool::pick_k_random_slots(usize k, Fn&& fn)
   //----- --- -- -  -  -   -
 
   std::uniform_int_distribution<usize> pick_first_slot{0, n_slots - 1};
-  const usize first_slot_i = pick_first_slot(rng);
+  const usize first_slot_i = pick_first_slot(rng) * n_shards + shard_i;
   fn(this->get_slot(first_slot_i));
   if (k == 1) {
     return;
   }
 
   std::uniform_int_distribution<usize> pick_second_slot{0, n_slots - 2};
-  usize second_slot_i = pick_second_slot(rng);
+  usize second_slot_i = pick_second_slot(rng) * n_shards + shard_i;
   if (second_slot_i >= first_slot_i) {
-    ++second_slot_i;
+    second_slot_i += n_shards;
   }
   BATT_CHECK_NE(first_slot_i, second_slot_i);
   fn(this->get_slot(second_slot_i));
@@ -253,7 +253,7 @@ void PageCacheSlot::Pool::pick_k_random_slots(usize k, Fn&& fn)
   // for speed.
   //
   for (usize i = 2; i < k; ++i) {
-    fn(this->get_slot(pick_first_slot(rng)));
+    fn(this->get_slot(pick_first_slot(rng) * n_shards + shard_i));
   }
 }
 
@@ -346,9 +346,9 @@ usize PageCacheSlot::Pool::clear_all()
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-void PageCacheSlot::Pool::background_eviction_thread_main()
+void PageCacheSlot::Pool::background_eviction_thread_main(usize thread_i, usize n_threads)
 {
-  Status status = [this]() -> Status {
+  Status status = [this, thread_i]() -> Status {
     std::default_random_engine rng{std::random_device{}()};
 
     const i64 n_threads = std::max<i64>(1, default_background_thread_count());
@@ -397,12 +397,15 @@ void PageCacheSlot::Pool::background_eviction_thread_main()
             kMaxCandidates, ((estimated_cache_bytes - global_target + 4095) / 4096) * 2);
 
         candidates.clear();
-        this->pick_k_random_slots(n_candidates, [&candidates](PageCacheSlot* slot) {
-          candidates.emplace_back(SlotWithLatestUse{
-              .slot = slot,
-              .latest_use = slot->get_latest_use(),
-          });
-        });
+        this->pick_k_random_slots(
+            n_candidates,
+            [&candidates](PageCacheSlot* slot) {
+              candidates.emplace_back(SlotWithLatestUse{
+                  .slot = slot,
+                  .latest_use = slot->get_latest_use(),
+              });
+            },
+            thread_i, n_threads);
 
         // Sort from least recently used to most recently used.
         //
