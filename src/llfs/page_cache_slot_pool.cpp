@@ -416,14 +416,13 @@ void PageCacheSlot::Pool::background_eviction_thread_main()
         // Try to find evictable candidates; stop as soon as the target is reached.
         //
         for (const SlotWithLatestUse& slu : candidates) {
-          // If we fail to evict, then check for halt and yield the thread.
+          // If we fail to evict, then check for halt.
           //
           if (!slu.slot->evict()) {
+            this->metrics_.background_evict_fail_count.add(1);
             if (this->halt_requested_) {
               break;
             }
-            update_eviction_metrics();
-            std::this_thread::yield();
             continue;
           }
 

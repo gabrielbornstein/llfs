@@ -59,6 +59,7 @@ class PageCacheSlot::Pool : public boost::intrusive_ref_counter<Pool>
     FastCountMetric<i64> evict_lru_count{0};
 
     CountMetric<i64> background_evict_count{0};
+    CountMetric<i64> background_evict_fail_count{0};
     CountMetric<i64> background_evict_byte_count{0};
     LatencyMetric background_evict_latency;
     LatencyMetric background_evict_byte_latency;
