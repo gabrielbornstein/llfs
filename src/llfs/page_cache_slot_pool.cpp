@@ -348,16 +348,14 @@ usize PageCacheSlot::Pool::clear_all()
 //
 void PageCacheSlot::Pool::background_eviction_thread_main(usize thread_i, usize n_threads)
 {
-  Status status = [this, thread_i]() -> Status {
+  Status status = [this, thread_i, n_threads]() -> Status {
     std::default_random_engine rng{std::random_device{}()};
-
-    const i64 n_threads = std::max<i64>(1, default_background_thread_count());
 
     constexpr usize kMaxCandidates = 65536;
     constexpr i64 kMinDelayUsec = 500;
     constexpr i64 kMaxDelayUsec = 750;
 
-    std::uniform_int_distribution<i64> pick_delay_usec{kMinDelayUsec, kMaxDelayUsec * n_threads};
+    std::uniform_int_distribution<i64> pick_delay_usec{kMinDelayUsec, kMaxDelayUsec};
 
     std::vector<SlotWithLatestUse> candidates;
 
