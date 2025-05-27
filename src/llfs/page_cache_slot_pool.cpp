@@ -171,6 +171,19 @@ PageCacheSlot* PageCacheSlot::Pool::get_slot(usize i)
 //
 PageCacheSlot* PageCacheSlot::Pool::allocate()
 {
+  // Before constructing _new_ slots, try popping one from the free queue.
+  //
+  PageCacheSlot* free_slot = nullptr;
+  while (this->free_queue_.pop(free_slot)) {
+    BATT_CHECK_NOT_NULLPTR(free_slot);
+    if (free_slot->evict()) {
+      BATT_CHECK(!free_slot->is_valid());
+      return free_slot;
+    }
+  }
+
+  // Free queue is empty; if we can construct a new one, do it.
+  //
   if (this->n_allocated_.load() < this->n_slots_) {
     const usize allocated_i = this->n_allocated_.fetch_add(1);
     if (allocated_i < this->n_slots_) {
@@ -186,21 +199,12 @@ PageCacheSlot* PageCacheSlot::Pool::allocate()
     // continue...
   }
 
-  // Try popping a free slot from the free queue.
-  //
-  PageCacheSlot* free_slot = nullptr;
-  while (this->free_queue_.pop(free_slot)) {
-    BATT_CHECK_NOT_NULLPTR(free_slot);
-    if (free_slot->evict()) {
-      BATT_CHECK(!free_slot->is_valid());
-      return free_slot;
-    }
-  }
-
   // If there is an in-progress slot construction, wait for it now.
   //
   BATT_CHECK_OK(this->n_constructed_.await_equal(this->n_slots_));
 
+  // Free queue was empty and all slots are constructed; we need to evict something.
+  //
   return this->evict_lru();
 }
 
