@@ -392,6 +392,13 @@ usize PageCacheSlot::Pool::clear_all()
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+bool PageCacheSlot::Pool::push_free_slot(PageCacheSlot* slot)
+{
+  return this->free_queue_.push(slot);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 void PageCacheSlot::Pool::background_eviction_thread_main(usize thread_i, usize n_threads)
 {
   Status status = [this, thread_i, n_threads]() -> Status {
@@ -483,6 +490,7 @@ void PageCacheSlot::Pool::background_eviction_thread_main(usize thread_i, usize 
               evict_count += 1;
               evict_byte_count += slot_page_size;
               slot->clear();
+              this->push_free_slot(slot);
               this->free_queue_.push(slot);
 
               // Are we done?

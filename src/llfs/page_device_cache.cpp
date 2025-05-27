@@ -243,6 +243,10 @@ void PageDeviceCache::erase(PageId key)
     // Important!  Only clear the slot once we have invalidated our table entry.
     //
     slot->clear();
+    if (!this->slot_pool_->push_free_slot(slot)) {
+      slot->set_obsolete_hint();
+    }
+
   } else {
     // If we weren't able to evict `key`, we can still try to read the slot to see if it contains
     // `key` but is non-evictable (because there are outstanding pins); if this is the case, then
@@ -256,7 +260,9 @@ void PageDeviceCache::erase(PageId key)
           this->page_ids_.get_physical_page(observed_key) != physical_page) {
         invalidate_ref();
         if (observed_key == key) {
-          slot->set_obsolete_hint();
+          if (!this->slot_pool_->push_free_slot(slot)) {
+            slot->set_obsolete_hint();
+          }
         }
       } else {
         // The table contains an older or newer generation of the same physical page; leave it

@@ -159,6 +159,12 @@ class PageCacheSlot::Pool : public boost::intrusive_ref_counter<Pool>
    */
   usize clear_all();
 
+  /** \brief Adds the passed slot to the free queue.
+   *
+   * \return true if the queue had space and the slot was successfully pushed.
+   */
+  bool push_free_slot(PageCacheSlot* slot);
+
   /** \brief Returns the metrics for this pool.
    */
   const Metrics& metrics() const
