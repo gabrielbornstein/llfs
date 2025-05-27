@@ -9,6 +9,8 @@
 #include <llfs/page_cache_slot.hpp>
 //
 
+#include <llfs/logging.hpp>
+
 #include <batteries/env.hpp>
 
 #include <random>
@@ -17,13 +19,40 @@ namespace llfs {
 
 namespace {
 
+template <typename T>
+T getenv_log(const char* var_name, T default_value)
+{
+  auto opt_value = batt::getenv_as<T>(var_name);
+  if (!opt_value) {
+    LLFS_LOG_INFO() << var_name << " not defined; using" << BATT_INSPECT(default_value);
+    return default_value;
+  }
+
+  LLFS_LOG_INFO() << var_name << " == " << opt_value;
+  return *opt_value;
+}
+
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 usize default_background_thread_count()
 {
-  static const usize value_ =
-      batt::getenv_as<usize>("LLFS_CACHE_BACKGROUND_EVICTION_THREADS").value_or(1);
+  static const usize value_ = getenv_log<usize>("LLFS_CACHE_BACKGROUND_EVICTION_THREADS", 1);
+  return value_;
+}
 
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+usize default_background_eviction_samples()
+{
+  static const usize value_ = getenv_log<usize>("LLFS_CACHE_BACKGROUND_EVICTION_SAMPLES", 1000);
+  return value_;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+usize default_background_eviction_percentile()
+{
+  static const usize value_ = getenv_log<usize>("LLFS_CACHE_BACKGROUND_EVICTION_PERCENTILE", 25);
   return value_;
 }
 
@@ -368,9 +397,14 @@ void PageCacheSlot::Pool::background_eviction_thread_main(usize thread_i, usize 
   Status status = [this, thread_i, n_threads]() -> Status {
     std::default_random_engine rng{std::random_device{}()};
 
-    constexpr usize kMaxSamples = 256;
-    constexpr i64 kMinDelayUsec = 500;
-    constexpr i64 kMaxDelayUsec = 750;
+    const usize kMaxSamples = default_background_eviction_samples();
+    const usize kPercentile = default_background_eviction_percentile();
+    const i64 kMinDelayUsec = 500;
+    const i64 kMaxDelayUsec = 750;
+
+    BATT_CHECK_GE(kMaxSamples, 2);
+    BATT_CHECK_GT(kPercentile, 0);
+    BATT_CHECK_LT(kPercentile, 100);
 
     std::uniform_int_distribution<i64> pick_delay_usec{kMinDelayUsec, kMaxDelayUsec};
     std::vector<SlotWithLatestUse> samples;
@@ -427,7 +461,7 @@ void PageCacheSlot::Pool::background_eviction_thread_main(usize thread_i, usize 
 
         // Find the median element by lastest use.
         //
-        auto middle = std::next(samples.begin(), n_samples / 2);
+        auto middle = std::next(samples.begin(), n_samples * kPercentile / 100);
         std::nth_element(samples.begin(), middle, samples.end(), LruSlotOrder{});
         const i64 median_use_time = middle->latest_use;
 
@@ -438,7 +472,12 @@ void PageCacheSlot::Pool::background_eviction_thread_main(usize thread_i, usize 
           if (slot->get_latest_use() - median_use_time < 0) {
             if (!slot->evict()) {
               evict_fail_count += 1;
+
             } else {
+              // Eviction succeeded!  Update tmp counters, clear the slot (to make it valid again; a
+              // thread *must* observe the transition from valid to invalid to know it has claimed
+              // exclusive access to the slot for filling), and push to the free queue.
+              //
               const i64 slot_page_size = slot->get_page_size_while_invalid();
               estimated_cache_bytes -= slot_page_size;
               evict_count += 1;
@@ -446,7 +485,11 @@ void PageCacheSlot::Pool::background_eviction_thread_main(usize thread_i, usize 
               slot->clear();
               this->free_queue_.push(slot);
 
+              // Are we done?
+              //
               if (estimated_cache_bytes <= global_target) {
+                // Refresh our estimates to make sure we are *really* done.
+                //
                 update_eviction_metrics();
                 if (estimated_cache_bytes <= global_target) {
                   break;
@@ -454,6 +497,9 @@ void PageCacheSlot::Pool::background_eviction_thread_main(usize thread_i, usize 
               }
             }
           }
+
+          // Move to the next slot; wrap around when we go past the last constructed slot.
+          //
           next_slot_i += n_threads;
           if (next_slot_i >= this->n_constructed_.get_value()) {
             next_slot_i = thread_i;
