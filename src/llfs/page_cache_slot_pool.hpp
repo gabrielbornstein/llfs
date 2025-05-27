@@ -13,6 +13,9 @@
 #include <llfs/metrics.hpp>
 #include <llfs/optional.hpp>
 
+#include <boost/lockfree/policies.hpp>
+#include <boost/lockfree/queue.hpp>
+
 namespace llfs {
 
 /** \brief A pool of PageCacheSlot objects.
@@ -214,6 +217,9 @@ class PageCacheSlot::Pool : public boost::intrusive_ref_counter<Pool>
   Metrics& metrics_ = Metrics::instance();
   std::mutex background_threads_mutex_;
   std::vector<std::thread> background_eviction_threads_;
+  boost::lockfree::queue<PageCacheSlot*, boost::lockfree::capacity<32768>,
+                         boost::lockfree::fixed_sized<true>>
+      free_queue_;
 };
 
 }  //namespace llfs

@@ -186,6 +186,19 @@ PageCacheSlot* PageCacheSlot::Pool::allocate()
     // continue...
   }
 
+  // Try popping a free slot from the free queue.
+  //
+  PageCacheSlot* free_slot = nullptr;
+  while (this->free_queue_.pop(free_slot)) {
+    BATT_CHECK_NOT_NULLPTR(free_slot);
+    if (free_slot->evict()) {
+      BATT_CHECK(!free_slot->is_valid());
+      return free_slot;
+    }
+  }
+
+  // If there is an in-progress slot construction, wait for it now.
+  //
   BATT_CHECK_OK(this->n_constructed_.await_equal(this->n_slots_));
 
   return this->evict_lru();
@@ -351,15 +364,16 @@ void PageCacheSlot::Pool::background_eviction_thread_main(usize thread_i, usize 
   Status status = [this, thread_i, n_threads]() -> Status {
     std::default_random_engine rng{std::random_device{}()};
 
-    constexpr usize kMaxCandidates = 65536;
+    constexpr usize kMaxSamples = 256;
     constexpr i64 kMinDelayUsec = 500;
     constexpr i64 kMaxDelayUsec = 750;
 
     std::uniform_int_distribution<i64> pick_delay_usec{kMinDelayUsec, kMaxDelayUsec};
-
-    std::vector<SlotWithLatestUse> candidates;
+    std::vector<SlotWithLatestUse> samples;
+    usize next_slot_i = thread_i;
 
     while (!this->halt_requested_) {
+      // Wait for delay period plus random jitter.
       {
         const i64 delay_usec = pick_delay_usec(rng);
         std::this_thread::sleep_for(std::chrono::microseconds(delay_usec));
@@ -370,6 +384,7 @@ void PageCacheSlot::Pool::background_eviction_thread_main(usize thread_i, usize 
       }
 
       i64 evict_count = 0;
+      i64 evict_fail_count = 0;
       i64 evict_byte_count = 0;
       i64 estimated_cache_bytes = this->metrics_.estimate_cache_bytes();
       i64 global_target = this->metrics_.estimate_total_limit();
@@ -377,10 +392,12 @@ void PageCacheSlot::Pool::background_eviction_thread_main(usize thread_i, usize 
 
       auto update_eviction_metrics = [&] {
         this->metrics_.background_evict_count.add(evict_count);
+        this->metrics_.background_evict_fail_count.add(evict_fail_count);
         this->metrics_.background_evict_byte_count.add(evict_byte_count);
         this->metrics_.background_evict_latency.update(start_time, evict_count);
         this->metrics_.background_evict_byte_latency.update(start_time, evict_byte_count);
         evict_count = 0;
+        evict_fail_count = 0;
         evict_byte_count = 0;
         start_time = std::chrono::steady_clock::now();
         estimated_cache_bytes = this->metrics_.estimate_cache_bytes();
@@ -388,54 +405,55 @@ void PageCacheSlot::Pool::background_eviction_thread_main(usize thread_i, usize 
       };
 
       while (global_target > 0 && estimated_cache_bytes > global_target && !this->halt_requested_) {
-        // Pick a number of candidates large enough to cover the gap, assuming 4kb pages; don't
-        // exceed our max.
+        // Pick n samples at random to estimate the median latest use value.
         //
-        const usize n_candidates = std::min<usize>(
-            kMaxCandidates, ((estimated_cache_bytes - global_target + 4095) / 4096) * 2);
-
-        candidates.clear();
+        const usize n_samples = std::min<usize>(kMaxSamples, this->n_constructed_.get_value());
+        samples.clear();
         this->pick_k_random_slots(
-            n_candidates,
-            [&candidates](PageCacheSlot* slot) {
-              candidates.emplace_back(SlotWithLatestUse{
+            n_samples,
+            [&samples](PageCacheSlot* slot) {
+              samples.emplace_back(SlotWithLatestUse{
                   .slot = slot,
                   .latest_use = slot->get_latest_use(),
               });
             },
             thread_i, n_threads);
 
-        // Sort from least recently used to most recently used.
-        //
-        std::sort(candidates.begin(), candidates.end(), LruSlotOrder{});
+        BATT_CHECK_EQ(samples.size(), n_samples);
 
-        // Only consider the least recently used half of the collected candidates.
+        // Find the median element by lastest use.
         //
-        const usize half_size = (candidates.size() + 1) / 2;
-        candidates.resize(half_size);
+        auto middle = std::next(samples.begin(), n_samples / 2);
+        std::nth_element(samples.begin(), middle, samples.end(), LruSlotOrder{});
+        const i64 median_use_time = middle->latest_use;
 
-        // Try to find evictable candidates; stop as soon as the target is reached.
+        // Update our sampled median_use_time every n_samples.
         //
-        for (const SlotWithLatestUse& slu : candidates) {
-          // If we fail to evict, then check for halt.
-          //
-          if (!slu.slot->evict()) {
-            this->metrics_.background_evict_fail_count.add(1);
-            if (this->halt_requested_) {
-              break;
+        for (usize progress = 0; progress < n_samples; ++progress) {
+          PageCacheSlot* slot = this->get_slot(next_slot_i);
+          if (slot->get_latest_use() - median_use_time < 0) {
+            if (!slot->evict()) {
+              evict_fail_count += 1;
+            } else {
+              const i64 slot_page_size = slot->get_page_size_while_invalid();
+              estimated_cache_bytes -= slot_page_size;
+              evict_count += 1;
+              evict_byte_count += slot_page_size;
+              slot->clear();
+              this->free_queue_.push(slot);
+
+              if (estimated_cache_bytes <= global_target) {
+                update_eviction_metrics();
+                if (estimated_cache_bytes <= global_target) {
+                  break;
+                }
+              }
             }
-            continue;
           }
-
-          const i64 slot_page_size = slu.slot->get_page_size_while_invalid();
-          estimated_cache_bytes -= slot_page_size;
-          evict_count += 1;
-          evict_byte_count += slot_page_size;
-          slu.slot->clear();
-
-          if (estimated_cache_bytes <= global_target) {
-            update_eviction_metrics();
-            if (estimated_cache_bytes <= global_target) {
+          next_slot_i += n_threads;
+          if (next_slot_i >= this->n_constructed_.get_value()) {
+            next_slot_i = thread_i;
+            if (next_slot_i >= this->n_constructed_.get_value()) {
               break;
             }
           }

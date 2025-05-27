@@ -126,11 +126,6 @@ class PageCacheSlot
    */
   static constexpr i64 kObsoletePenalty = -(i64{1} << 56);
 
-  /** \brief When a slot is cleared, its LRU priority gets boosted so that we don't waste work
-   * evicting it again.
-   */
-  static constexpr i64 kClearSlotLruPriority = (i64{1} << 56);
-
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   // Forward-declarations of member types.

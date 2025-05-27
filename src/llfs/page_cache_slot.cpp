@@ -77,7 +77,6 @@ void PageCacheSlot::clear()
   this->p_value_ = nullptr;
   this->obsolete_.store(0);
   this->page_size_ = PageSize{0};
-  this->update_latest_use(PageCacheSlot::kClearSlotLruPriority);
   this->set_valid();
 }
 
