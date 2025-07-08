@@ -174,8 +174,8 @@ class PageAllocator
       const auto in_use_bytes = in_use_count * page_size_bytes;
 
       out << "PageAllocator{.page_size=" << batt::dump_size(page_size_bytes)
-          << ", .free=" << free_count << "/" << total_count << ", .in_use=" << in_use_bytes << "("
-          << batt::dump_size(in_use_bytes) << "),}";
+          << ", .free=" << free_count << "/" << total_count << ", .in_use=" << in_use_count
+          << ", .in_use_bytes=" << in_use_bytes << "(" << batt::dump_size(in_use_bytes) << "),}";
     };
   }
 
