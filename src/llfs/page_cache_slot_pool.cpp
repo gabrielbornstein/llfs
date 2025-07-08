@@ -452,7 +452,8 @@ void PageCacheSlot::Pool::background_eviction_thread_main(usize thread_i, usize 
       while (global_target > 0 && estimated_cache_bytes > global_target && !this->halt_requested_) {
         // Pick n samples at random to estimate the median latest use value.
         //
-        const usize n_samples = std::min<usize>(kMaxSamples, this->n_constructed_.get_value());
+        const usize n_samples = std::min<usize>(kMaxSamples,  //
+                                                this->n_constructed_.get_value() / n_threads);
         samples.clear();
         if (n_samples == 0) {
           update_eviction_metrics();
@@ -479,9 +480,9 @@ void PageCacheSlot::Pool::background_eviction_thread_main(usize thread_i, usize 
         BATT_CHECK_LT(middle, samples.end()) << BATT_INSPECT(n_samples);
         const i64 median_use_time = middle->latest_use;
 
-        // Update our sampled median_use_time every n_samples.
+        // Update our sampled median_use_time every 2 * n_samples.
         //
-        for (usize progress = 0; progress < n_samples; ++progress) {
+        for (usize progress = 0; progress < 2 * n_samples; ++progress) {
           PageCacheSlot* slot = this->get_slot(next_slot_i);
           if (slot->get_latest_use() - median_use_time < 0) {
             if (!slot->evict()) {
