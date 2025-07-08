@@ -50,9 +50,17 @@ usize default_background_eviction_samples()
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+usize default_background_evictions_per_sample()
+{
+  static const usize value_ = getenv_log<usize>("LLFS_CACHE_BACKGROUND_EVICTIONS_PER_SAMPLE", 8);
+  return value_;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 usize default_background_eviction_percentile()
 {
-  static const usize value_ = getenv_log<usize>("LLFS_CACHE_BACKGROUND_EVICTION_PERCENTILE", 25);
+  static const usize value_ = getenv_log<usize>("LLFS_CACHE_BACKGROUND_EVICTION_PERCENTILE", 20);
   return value_;
 }
 
@@ -417,6 +425,8 @@ void PageCacheSlot::Pool::background_eviction_thread_main(usize thread_i, usize 
     std::vector<SlotWithLatestUse> samples;
     usize next_slot_i = thread_i;
 
+    const usize evictions_per_sample = default_background_evictions_per_sample();
+
     while (!this->halt_requested_) {
       // Wait for delay period plus random jitter.
       {
@@ -482,7 +492,8 @@ void PageCacheSlot::Pool::background_eviction_thread_main(usize thread_i, usize 
 
         // Update our sampled median_use_time every 2 * n_samples.
         //
-        for (usize progress = 0; progress < 2 * n_samples; ++progress) {
+        const usize next_sample = evictions_per_sample * n_samples;
+        for (usize progress = 0; progress < next_sample; ++progress) {
           PageCacheSlot* slot = this->get_slot(next_slot_i);
           if (slot->get_latest_use() - median_use_time < 0) {
             if (!slot->evict()) {
