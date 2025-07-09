@@ -37,6 +37,7 @@ class IoRingPageFileDevice : public PageDevice
     PageCount page_count;
     FileOffset page_0_offset;
     u16 page_size_log2;
+    bool is_last_in_file;
   };
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -75,6 +76,8 @@ class IoRingPageFileDevice : public PageDevice
   PageIdFactory page_ids() override;
 
   PageSize page_size() override;
+
+  bool is_last_in_file() const override;
 
   StatusOr<std::shared_ptr<PageBuffer>> prepare(PageId page_id) override;
 

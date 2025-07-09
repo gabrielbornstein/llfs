@@ -26,6 +26,7 @@ namespace llfs {
       .page_count = PageCount{BATT_CHECKED_CAST(u32, config->page_count.value())},
       .page_0_offset = FileOffset{config.absolute_page_0_offset()},
       .page_size_log2 = BATT_CHECKED_CAST(u16, config->page_size_log2.value()),
+      .is_last_in_file = BATT_CHECKED_CAST(bool, config->is_last_in_file()),
   };
 }
 
@@ -68,12 +69,15 @@ std::unique_ptr<IoRingPageFileDevice> IoRingPageFileDevice::make_sharded_view(
 
   const u16 shards_per_page_log2 = this->layout().page_size_log2 - shard_size_log2;
 
-  auto sharded_layout = PhysicalLayout{
-      .page_size = shard_size,
-      .page_count = PageCount{this->layout().page_count << shards_per_page_log2},
-      .page_0_offset = this->layout().page_0_offset,
-      .page_size_log2 = shard_size_log2,
-  };
+  auto sharded_layout =
+      PhysicalLayout{.page_size = shard_size,
+                     .page_count = PageCount{this->layout().page_count << shards_per_page_log2},
+                     .page_0_offset = this->layout().page_0_offset,
+                     .page_size_log2 = shard_size_log2,
+                     // TODO: [gbornste 7/9/25] Defaulting to no dynamic storage here. Consider, do
+                     // we need to pass a configurable parameter in instead?
+                     //
+                     .is_last_in_file = false};
 
   auto sharded_view_device = std::make_unique<IoRingPageFileDevice>(
       device_id, std::addressof(this->file_), sharded_layout);
@@ -312,10 +316,18 @@ void IoRingPageFileDevice::drop(PageId id, WriteHandler&& handler)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+bool IoRingPageFileDevice::is_last_in_file() const
+{
+  return this->physical_layout_.is_last_in_file;
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 StatusOr<u64> IoRingPageFileDevice::get_physical_page(PageId page_id) const
 {
   const i64 physical_page = this->page_ids_.get_physical_page(page_id);
   if (physical_page < 0 || !(physical_page < static_cast<i64>(this->layout().page_count))) {
+    LOG(INFO) << "OutOfRange in get_physical_page";
     return Status{batt::StatusCode::kOutOfRange};
   }
 
