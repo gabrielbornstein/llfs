@@ -326,7 +326,6 @@ TEST_P(DynamicPageAllocation, PageDeviceGrows)
     // pages should already exist in the file.
     //
     for (u64 i = 0; i < this->initial_page_count; ++i) {
-      LOG(INFO) << "Allocating pages up until initial_page_count";
       // Verify the file_size does not grow here.
       //
       ASSERT_EQ(current_file_size, original_file_size);
@@ -348,19 +347,17 @@ TEST_P(DynamicPageAllocation, PageDeviceGrows)
     }
 
     for (u64 i = this->initial_page_count; i < this->max_page_count; ++i) {
-      LOG(INFO) << "Allocating pages up until max_page_count";
       // Verify the total file_size is equivalent to the number of allocated pages +
       // config size (in bytes).
       //
       u64 expected_file_size = config_size + i * this->page_device->page_size();
       ASSERT_EQ(current_file_size, expected_file_size);
-      LOG(INFO) << "About to call prepare";
+
       batt::StatusOr<std::shared_ptr<llfs::PageBuffer>> page_buffer =
           this->page_device->prepare(static_cast<llfs::PageId>(i));
       ASSERT_TRUE(page_buffer.ok()) << BATT_INSPECT(page_buffer);
 
       batt::Status write_status = batt::Task::await<batt::Status>([&](auto&& handler) {
-        LOG(INFO) << "About to call write";
         this->page_device->write(*page_buffer, BATT_FORWARD(handler));
       });
 
