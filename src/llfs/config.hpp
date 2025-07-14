@@ -116,7 +116,7 @@ BATT_STATIC_ASSERT_EQ(usize{1} << kDirectIOBlockAlignLog2, kDirectIOBlockAlign);
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 // Controls whether a pool of page buffers is maintained by class PageBuffer to speed up allocation.
 //
-constexpr bool kEnablePageBufferPool = true;
+constexpr bool kEnablePageBufferPoolByDefault = true;
 
 // The maximum number of page buffers of a given size to cache (in order to avoid/reduce heap
 // allocation).
