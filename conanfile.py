@@ -75,7 +75,8 @@ class LlfsConan(ConanFile):
 
 
     def requirements(self):
-        self.requires("batteries/[>=0.59.0 <1]", **VISIBLE)
+        #self.requires("batteries/[>=0.59.0 <1]", **VISIBLE)
+        self.requires("batteries/0.59.3-devel", **VISIBLE)
         self.requires("boost/[>=1.85.0 <2]", **VISIBLE, **OVERRIDE)
         self.requires("cli11/[>=2.4.2 <3]", **VISIBLE)
         self.requires("glog/[>=0.7.1 <1]", **VISIBLE, **OVERRIDE)
@@ -90,7 +91,7 @@ class LlfsConan(ConanFile):
         if platform.system() == "Linux":
             self.requires("liburing/[>=2.4 <3]", **VISIBLE)
             self.requires("libfuse/[>=3.16.2 <4]", **VISIBLE)
-            self.requires("libunwind/[>=1.7.2 <2]", **VISIBLE, **OVERRIDE)
+            self.requires("libunwind/[>=1.8.0 <2]", **VISIBLE, **OVERRIDE)
 
     #+++++++++++-+-+--+----- --- -- -  -  -   -
 
