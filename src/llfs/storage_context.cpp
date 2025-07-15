@@ -151,9 +151,6 @@ Status StorageContext::add_existing_file(const batt::SharedPtr<StorageFile>& fil
                                batt::make_shared<StorageObjectInfo>(batt::make_copy(file), slot));
         });
 
-  LOG(INFO) << "add_existing_file status==" << BATT_INSPECT(status)
-            << ", last_inf_file==" << last_in_file;
-
   BATT_REQUIRE_OK(status);
   return OkStatus();
 }

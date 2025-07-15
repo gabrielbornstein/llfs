@@ -340,7 +340,7 @@ class PageCacheSlot
   Pool& pool_;
   PageId key_;
   Optional<batt::Latch<std::shared_ptr<const PageView>>> value_;
-  batt::Latch<std::shared_ptr<const PageView>>* p_value_;
+  batt::Latch<std::shared_ptr<const PageView>>* p_value_{nullptr};
   std::atomic<u64> state_{0};
   std::atomic<u64> ref_count_{0};
   std::atomic<i64> latest_use_{0};

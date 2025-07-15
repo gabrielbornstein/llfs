@@ -66,9 +66,6 @@ Status configure_storage_object(StorageFileBuilder::Transaction& txn,
   p_config->uuid = options.uuid.value_or(boost::uuids::random_generator{}());
   p_config->set_last_in_file(last_in_file);
 
-  LOG(INFO) << "PageDevice page_count==" << options.page_count << ", last_in_file==" << last_in_file
-            << ", max_page_count==" << max_page_count << ", uuid==" << p_config->uuid;
-
   txn.require_pre_flush_action([pages_offset, page_size = page_size,
                                 page_count = options.page_count](RawBlockFile& file) -> Status {
     LLFS_DVLOG(1) << "truncating to " << BATT_INSPECT(pages_offset.upper_bound)
