@@ -46,7 +46,6 @@ auto PageCacheSlot::fill(PageId key, PageSize page_size, i64 lru_priority) -> Pi
   this->key_ = key;
   this->value_.emplace();
   this->p_value_ = std::addressof(*this->value_);
-  this->obsolete_.store(0);
   this->page_size_ = page_size;
   this->update_latest_use(lru_priority);
 
@@ -75,7 +74,7 @@ void PageCacheSlot::clear()
   this->key_ = PageId{};
   this->value_ = None;
   this->p_value_ = nullptr;
-  this->obsolete_.store(0);
+  this->latest_use_.store(0);
   this->page_size_ = PageSize{0};
   this->set_valid();
 }

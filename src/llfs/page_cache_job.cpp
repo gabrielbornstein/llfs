@@ -594,6 +594,7 @@ StatusOr<usize> PageCacheJob::prune(u64 callers)
     this->pinned_.erase(id);
     this->deferred_new_pages_.erase(id);
     this->cache_->deallocate_page(id, callers | Caller::PageCacheJob_prune, this->job_id);
+    LOG(INFO) << "deallocate_page(" << id << ")";
   }
 
   BATT_CHECK(this->deferred_new_pages_.empty());

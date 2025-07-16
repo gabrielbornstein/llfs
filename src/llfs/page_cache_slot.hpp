@@ -13,7 +13,6 @@
 #include <llfs/config.hpp>
 //
 #include <llfs/int_types.hpp>
-#include <llfs/lru_clock.hpp>
 #include <llfs/optional.hpp>
 #include <llfs/page_id.hpp>
 #include <llfs/page_view.hpp>
@@ -116,15 +115,6 @@ class PageCacheSlot
   /** \brief The Valid bit.
    */
   static constexpr u64 kValidMask = 1;
-
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-
-  /** \brief When a page is hinted/marked as `obsolete`, this number is added to the LRU logical
-   * time stamp when determining which slot to evict under pressure.
-   *
-   * The obsolete penality is cleared when `clear()` or `fill()` is called.
-   */
-  static constexpr i64 kObsoletePenalty = -(i64{1} << 56);
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
@@ -298,8 +288,6 @@ class PageCacheSlot
   //----- --- -- -  -  -   -
 
   /** \brief Updates the latest use logical timestamp for this object, to make eviction less likely.
-   *
-   * Only has an effect if the "obsolete hint" (see set_obsolete_hint, get_obsolete_hint) is false.
    */
   void update_latest_use(i64 lru_priority);
 
@@ -308,6 +296,11 @@ class PageCacheSlot
    * This function sets the latest_use LTS to a very old value.
    */
   void set_obsolete_hint();
+
+  /** \brief If the latest use counter for this slot non-positive, returns true (indicating this
+   * slot is ready to be evicted); otherwise, decrement the use counter and return false.
+   */
+  bool expire();
 
   /** \brief Returns the current latest use logical timestamp.
    */
@@ -344,7 +337,6 @@ class PageCacheSlot
   std::atomic<u64> state_{0};
   std::atomic<u64> ref_count_{0};
   std::atomic<i64> latest_use_{0};
-  std::atomic<i64> obsolete_{0};
   PageSize page_size_{0};
 };
 
@@ -447,15 +439,22 @@ BATT_ALWAYS_INLINE inline void PageCacheSlot::extend_pin()
 //
 BATT_ALWAYS_INLINE inline void PageCacheSlot::update_latest_use(i64 lru_priority)
 {
-  this->latest_use_.store(LRUClock::advance_local() + this->obsolete_.load() + lru_priority);
+  this->latest_use_.store(std::max<i64>(lru_priority, 1));
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 BATT_ALWAYS_INLINE inline void PageCacheSlot::set_obsolete_hint()
 {
-  this->obsolete_.store(kObsoletePenalty);
-  this->update_latest_use(0);
+  this->latest_use_.store(0);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+BATT_ALWAYS_INLINE inline bool PageCacheSlot::expire()
+{
+  const i64 observed = this->latest_use_.fetch_sub(1);
+  return observed <= 1;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

@@ -146,7 +146,7 @@ batt::StatusOr<PageCacheSlot::PinnedRef> PageDeviceCache::find_or_insert(
     //
     if (!new_slot) {
       new_slot.emplace();
-      new_slot->p_slot = this->slot_pool_->allocate();
+      new_slot->p_slot = this->slot_pool_->allocate(page_size);
       if (!new_slot->p_slot) {
         this->metrics().full_count.add(1);
         return ::llfs::make_status(StatusCode::kCacheSlotsFull);
