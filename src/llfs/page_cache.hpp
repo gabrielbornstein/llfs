@@ -57,6 +57,8 @@ namespace llfs {
 class PageCacheJob;
 struct JobCommitParams;
 
+#if LLFS_TRACK_NEW_PAGE_EVENTS
+
 struct NewPageTracker {
   enum struct Event {
     kMinValue,
@@ -91,6 +93,8 @@ inline std::ostream& operator<<(std::ostream& out, const NewPageTracker& t)
                             1]
              << ",}";
 }
+
+#endif  // LLFS_TRACK_NEW_PAGE_EVENTS
 
 //=#=#==#==#===============+=+=+=+=++=++++++++++++++-++-+--+-+----+---------------
 //
@@ -165,13 +169,14 @@ class PageCache : public PageLoader
 
   std::unique_ptr<PageCacheJob> new_job();
 
-  StatusOr<std::shared_ptr<PageBuffer>> allocate_page_of_size(
-      PageSize size, batt::WaitForResource wait_for_resource, u64 callers, u64 job_id,
-      const batt::CancelToken& cancel_token = None);
+  StatusOr<PinnedPage> allocate_page_of_size(PageSize size, batt::WaitForResource wait_for_resource,
+                                             LruPriority lru_priority, u64 callers, u64 job_id,
+                                             const batt::CancelToken& cancel_token = None);
 
-  StatusOr<std::shared_ptr<PageBuffer>> allocate_page_of_size_log2(
-      PageSizeLog2 size_log2, batt::WaitForResource wait_for_resource, u64 callers, u64 job_id,
-      const batt::CancelToken& cancel_token = None);
+  StatusOr<PinnedPage> allocate_page_of_size_log2(PageSizeLog2 size_log2,
+                                                  batt::WaitForResource wait_for_resource,
+                                                  LruPriority lru_priority, u64 callers, u64 job_id,
+                                                  const batt::CancelToken& cancel_token = None);
 
   // Returns a page allocated via `allocate_page` to the free pool.  This MUST be done before the
   // page is written to the `PageDevice`.
@@ -216,21 +221,19 @@ class PageCache : public PageLoader
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 
   //----- --- -- -  -  -   -
-  /** \brief Inserts a newly built PageView into the cache.
-   */
-  StatusOr<PinnedPage> put_view(std::shared_ptr<const PageView>&& view, LruPriority lru_priority,
-                                u64 callers, u64 job_id);
-
-  //----- --- -- -  -  -   -
   /** \brief Removes all cached data for the specified page.
    */
   void purge(PageId id_val, u64 callers, u64 job_id);
 
   bool page_might_contain_key(PageId id, const KeyView& key) const;
 
+#if LLFS_TRACK_NEW_PAGE_EVENTS
+
   BoxedSeq<NewPageTracker> find_new_page_events(PageId page_id) const;
 
   void track_new_page_event(const NewPageTracker& tracker);
+
+#endif  // LLFS_TRACK_NEW_PAGE_EVENTS
 
   PageCacheMetrics& metrics()
   {
@@ -246,20 +249,6 @@ class PageCache : public PageLoader
   {
     return this->cache_slot_pool_->clear_all();
   }
-
-#if 0
-  const PageCacheSlot::Pool::Metrics& metrics_for_page_size(PageSize page_size) const
-  {
-    const i32 page_size_log2 = batt::log2_ceil(page_size);
-
-    BATT_CHECK_LT(static_cast<usize>(page_size_log2),
-                  this->cache_slot_pool_by_page_size_log2_.size());
-
-    BATT_CHECK_NOT_NULLPTR(this->cache_slot_pool_by_page_size_log2_[page_size_log2]);
-
-    return this->cache_slot_pool_by_page_size_log2_[page_size_log2]->metrics();
-  }
-#endif
 
   /** \brief Returns the PageDeviceEntry for the device that owns the given page.
    *
@@ -342,20 +331,15 @@ class PageCache : public PageLoader
   //
   boost::intrusive_ptr<PageCacheSlot::Pool> cache_slot_pool_;
 
-#if 0
-  // A pool of cache slots for each page size.
-  //
-  std::array<boost::intrusive_ptr<PageCacheSlot::Pool>, kMaxPageSizeLog2>
-      cache_slot_pool_by_page_size_log2_;
-#endif
-
   // A thread-safe shared map from PageLayoutId to PageReader function; layouts must be registered
   // with the PageCache so that we trace references during page recycling (aka garbage collection).
   //
   std::shared_ptr<batt::Mutex<PageLayoutReaderMap>> page_readers_;
 
+#if LLFS_TRACK_NEW_PAGE_EVENTS
   std::array<NewPageTracker, 16384> history_;
   std::atomic<isize> history_end_{0};
+#endif  // LLFS_TRACK_NEW_PAGE_EVENTS
 
 };  // class PageCache
 

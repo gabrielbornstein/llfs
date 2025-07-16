@@ -205,7 +205,7 @@ class VolumeTest : public ::testing::Test
 
     llfs::StatusOr<std::shared_ptr<llfs::PageBuffer>> page_allocated = job.new_page(
         llfs::PageSize{256}, batt::WaitForResource::kFalse, llfs::OpaquePageView::page_layout_id(),
-        llfs::Caller::Unknown, /*cancel_token=*/llfs::None);
+        llfs::LruPriority{1}, llfs::Caller::Unknown, /*cancel_token=*/llfs::None);
 
     BATT_REQUIRE_OK(page_allocated);
 
@@ -1954,9 +1954,10 @@ batt::StatusOr<llfs::PageId> VolumeSimTest::build_page_with_refs_to(
     llfs::PageCacheJob& job, llfs::StorageSimulation& /*sim*/)
 {
   batt::StatusOr<llfs::PageGraphNodeBuilder> page_builder =
-      llfs::PageGraphNodeBuilder::from_new_page(job.new_page(
-          page_size, batt::WaitForResource::kFalse, llfs::PageGraphNodeView::page_layout_id(),
-          /*callers=*/0, /*cancel_token=*/llfs::None));
+      llfs::PageGraphNodeBuilder::from_new_page(
+          job.new_page(page_size, batt::WaitForResource::kFalse,
+                       llfs::PageGraphNodeView::page_layout_id(), llfs::LruPriority{1},
+                       /*callers=*/0, /*cancel_token=*/llfs::None));
 
   BATT_REQUIRE_OK(page_builder);
 
