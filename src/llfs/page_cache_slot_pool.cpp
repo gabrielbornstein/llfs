@@ -140,7 +140,8 @@ PageCacheSlot* PageCacheSlot::Pool::allocate(PageSize page_size)
   this->metrics_.allocate_count.add(1);
 
   const i64 max_resident_size = static_cast<i64>(this->max_byte_size_);
-  i64 observed_resident_size = this->resident_size_.fetch_add(page_size) + page_size;
+  const i64 prior_resident_size = this->resident_size_.fetch_add(page_size);
+  i64 observed_resident_size = prior_resident_size + page_size;
   PageCacheSlot* free_slot = nullptr;
 
   // Before constructing _new_ slots, try popping one from the free queue.
@@ -158,14 +159,18 @@ PageCacheSlot* PageCacheSlot::Pool::allocate(PageSize page_size)
 
   // Free queue is empty; if we can construct a new one, do it.
   //
-  if (!free_slot && this->n_allocated_.load() < this->n_slots_ &&
-      observed_resident_size < max_resident_size) {
-    free_slot = this->construct_new_slot();
-    if (free_slot) {
-      BATT_CHECK(!free_slot->is_valid());
-      this->metrics_.allocate_construct_count.add(1);
+  const auto try_construct_new_slot = [&] {
+    if (!free_slot && this->n_allocated_.load() < this->n_slots_ &&
+        prior_resident_size < max_resident_size) {
+      free_slot = this->construct_new_slot();
+      if (free_slot) {
+        BATT_CHECK(!free_slot->is_valid());
+        this->metrics_.allocate_construct_count.add(1);
+      }
     }
-  }
+  };
+
+  try_construct_new_slot();
 
   // If both of the previous methods failed to allocate a free_slot, or if the cache has grown too
   // large, then evict expired pages until we fix both problems.
@@ -177,8 +182,23 @@ PageCacheSlot* PageCacheSlot::Pool::allocate(PageSize page_size)
     // Loop over all constructed slots, evicting until we have a slot to return *and* we are under
     // the limit.
     //
-    for (;;) {
-      PageCacheSlot* candidate = p_slots[this->advance_clock_hand(n_slots_constructed)].get();
+    usize slot_i = 0;
+    for (usize n_attempts = 0;; ++n_attempts) {
+      const usize prev_slot_i = slot_i;
+      slot_i = this->advance_clock_hand(n_slots_constructed);
+
+      // If we wrap-around and have no free slot, try constructing a new one if possible.
+      //
+      if (!free_slot && (slot_i < prev_slot_i || n_attempts > this->n_slots_ * 2)) {
+        try_construct_new_slot();
+        if (free_slot && observed_resident_size <= max_resident_size) {
+          break;
+        }
+      }
+
+      // Try to expire the next slot; if that succeeds, try evicting.
+      //
+      PageCacheSlot* candidate = p_slots[slot_i].get();
       if (!candidate->expire()) {
         continue;
       }
@@ -199,12 +219,11 @@ PageCacheSlot* PageCacheSlot::Pool::allocate(PageSize page_size)
 
       observed_resident_size = this->resident_size_.fetch_sub(bytes_evicted) - bytes_evicted;
       if (observed_resident_size <= max_resident_size) {
+        BATT_CHECK_NOT_NULLPTR(free_slot);
         break;
       }
     }  // for (;;) - loop through slots until resident set <= max
   }
-
-  BATT_CHECK_NOT_NULLPTR(free_slot);
 
   return free_slot;
 }
