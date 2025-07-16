@@ -75,7 +75,7 @@ class LlfsConan(ConanFile):
 
 
     def requirements(self):
-        self.requires("batteries/[>=0.59.0 <1]", **VISIBLE)
+        self.requires("batteries/0.59.0", **VISIBLE)
         self.requires("boost/[>=1.85.0 <2]", **VISIBLE, **OVERRIDE)
         self.requires("cli11/[>=2.4.2 <3]", **VISIBLE)
         self.requires("glog/[>=0.7.1 <1]", **VISIBLE, **OVERRIDE)
