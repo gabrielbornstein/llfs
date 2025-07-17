@@ -54,6 +54,8 @@ namespace {
 
 using namespace llfs::int_types;
 
+using llfs::IgnoreKey;
+
 constexpr usize kNumTestSlots = 4;
 const std::string kTestPoolName = "Test PageCacheSlot Pool";
 const llfs::PageSize kFakePageSize{4096};
@@ -172,7 +174,7 @@ TEST_F(PageCacheSlotTest, StateTransitions)
   //
   {
     llfs::PageCacheSlot::PinnedRef valid_cleared_ref =
-        slot->acquire_pin(llfs::PageId{}, /*ignore_key=*/true);
+        slot->acquire_pin(llfs::PageId{}, IgnoreKey{true});
     EXPECT_EQ(valid_cleared_ref.value(), nullptr);
     EXPECT_EQ(slot->pin_count(), 1u);
     EXPECT_EQ(slot->ref_count(), 1u);
@@ -282,8 +284,7 @@ TEST_F(PageCacheSlotTest, StateTransitions)
   EXPECT_EQ(slot->ref_count(), 0u);
   EXPECT_TRUE(slot->is_valid());
   {
-    llfs::PageCacheSlot::PinnedRef pinned_ref =
-        slot->acquire_pin(llfs::PageId{}, /*ignore_key=*/true);
+    llfs::PageCacheSlot::PinnedRef pinned_ref = slot->acquire_pin(llfs::PageId{}, IgnoreKey{true});
 
     EXPECT_TRUE(pinned_ref);
     EXPECT_TRUE(slot->is_valid());
@@ -294,7 +295,7 @@ TEST_F(PageCacheSlotTest, StateTransitions)
   EXPECT_TRUE(slot->is_valid());
   {
     llfs::PageCacheSlot::PinnedRef pinned_ref =
-        slot->acquire_pin(llfs::PageId{1}, /*ignore_key=*/false);
+        slot->acquire_pin(llfs::PageId{1}, IgnoreKey{false});
 
     EXPECT_TRUE(pinned_ref);
     EXPECT_TRUE(slot->is_valid());
@@ -307,7 +308,7 @@ TEST_F(PageCacheSlotTest, StateTransitions)
     // Try to acquire pin using the wrong PageId; expect to fail.
     //
     llfs::PageCacheSlot::PinnedRef pinned_ref =
-        slot->acquire_pin(llfs::PageId{2}, /*ignore_key=*/false);
+        slot->acquire_pin(llfs::PageId{2}, IgnoreKey{false});
 
     EXPECT_FALSE(pinned_ref);
     EXPECT_TRUE(slot->is_valid());
@@ -453,7 +454,7 @@ TEST_F(PageCacheSlotTest, FillFailureClearedDeath)
 
   {
     llfs::PageCacheSlot::PinnedRef valid_cleared_ref =
-        slot->acquire_pin(llfs::PageId{}, /*ignore_key=*/true);
+        slot->acquire_pin(llfs::PageId{}, IgnoreKey{true});
     EXPECT_TRUE(slot->is_valid());
     EXPECT_DEATH(slot->fill(llfs::PageId{2}, kFakePageSize, /*lru_priority=*/0),
                  "Assert.*fail.*is.*valid");
@@ -513,7 +514,7 @@ TEST_F(PageCacheSlotTest, RefCounting)
       if (i % 2) {
         {
           llfs::PageCacheSlot::PinnedRef pinned =
-              slot->acquire_pin(llfs::PageId{}, /*ignore_key=*/true);
+              slot->acquire_pin(llfs::PageId{}, IgnoreKey{true});
         }
       } else {
         slot->evict_if_key_equals(llfs::PageId{1});

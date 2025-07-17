@@ -178,6 +178,11 @@ class PageCache : public PageLoader
                                                   LruPriority lru_priority, u64 callers, u64 job_id,
                                                   const batt::CancelToken& cancel_token = None);
 
+  StatusOr<PinnedPage> allocate_filter_page_for(PageId page_id, LruPriority lru_priority);
+
+  void async_write_filter_page(const PinnedPage& new_filter_page,
+                               PageDevice::WriteHandler&& handler);
+
   // Returns a page allocated via `allocate_page` to the free pool.  This MUST be done before the
   // page is written to the `PageDevice`.
   //
@@ -269,6 +274,11 @@ class PageCache : public PageLoader
                      const PageCacheOptions& options) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+  //----- --- -- -  -  -   -
+  StatusOr<PinnedPage> pin_allocated_page_to_cache(PageDeviceEntry* device_entry,
+                                                   PageSize page_size, PageId page_id,
+                                                   LruPriority lru_priority);
 
   //----- --- -- -  -  -   -
   /** \brief Attempts to find the specified page (`page_id`) in the cache; if successful, the cache

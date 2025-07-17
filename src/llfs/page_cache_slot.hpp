@@ -239,7 +239,8 @@ class PageCacheSlot
    * A slot is removed from the cache's LRU list when its pin count goes from 0 -> 1, and placed
    * back at the "most recently used" end of the LRU list when the pin count goes from 1 -> 0.
    */
-  PinnedRef acquire_pin(PageId key, bool ignore_key = false);
+  PinnedRef acquire_pin(PageId key, IgnoreKey ignore_key = IgnoreKey{false},
+                        IgnoreGeneration ignore_generation = IgnoreGeneration{false});
 
   /** \brief Called when creating a copy of PinnedCacheSlot, i.e. only when the pin count is going
    * from n -> n+1, where n > 0.
@@ -534,7 +535,9 @@ namespace llfs {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-BATT_ALWAYS_INLINE inline auto PageCacheSlot::acquire_pin(PageId key, bool ignore_key) -> PinnedRef
+BATT_ALWAYS_INLINE inline auto PageCacheSlot::acquire_pin(PageId key, IgnoreKey ignore_key,
+                                                          IgnoreGeneration ignore_generation)
+    -> PinnedRef
 {
   const auto old_state = this->state_.fetch_add(kPinCountDelta, std::memory_order_acquire);
   const auto new_state = old_state + kPinCountDelta;
@@ -556,7 +559,9 @@ BATT_ALWAYS_INLINE inline auto PageCacheSlot::acquire_pin(PageId key, bool ignor
   // the key.  If the key doesn't match, release the ref and return failure.
   //
   if (!Self::is_valid(old_state) ||
-      (!ignore_key && (!this->key_.is_valid() || this->key_ != key))) {
+      (!ignore_key && (!this->key_.is_valid() ||
+                       !((!ignore_generation && this->key_ == key) ||
+                         (ignore_generation && is_same_physical_page(this->key_, key)))))) {
     this->release_pin();
     return PinnedRef{};
   }

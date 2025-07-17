@@ -519,37 +519,7 @@ StatusOr<PinnedPage> PageCache::allocate_page_of_size_log2(PageSizeLog2 size_log
       });
 #endif  // LLFS_TRACK_NEW_PAGE_EVENTS
 
-      StatusOr<std::shared_ptr<PageBuffer>> new_page_buffer = arena.device().prepare(*page_id);
-      BATT_REQUIRE_OK(new_page_buffer);
-
-      NewPageView* p_new_page_view = nullptr;
-
-      // PageDevice::prepare must be thread-safe.
-      //
-      StatusOr<PageCacheSlot::PinnedRef> pinned_slot = device_entry->cache.find_or_insert(
-          *page_id, page_size, lru_priority,
-          /*initialize=*/
-          [&new_page_buffer, &p_new_page_view](const PageCacheSlot::PinnedRef& pinned_slot) {
-            // Create a NewPageView object as a placeholder so we can insert the new page into the
-            // cache.
-            //
-            std::shared_ptr<NewPageView> new_page_view =
-                std::make_shared<NewPageView>(std::move(*new_page_buffer));
-
-            // Save a pointer to the NewPageView to create the PinnedPage below.
-            //
-            p_new_page_view = new_page_view.get();
-
-            // Access the slot's Latch and set it.
-            //
-            batt::Latch<std::shared_ptr<const PageView>>* latch = pinned_slot.value();
-            latch->set_value(std::move(new_page_view));
-          });
-
-      BATT_REQUIRE_OK(pinned_slot);
-      BATT_CHECK_NOT_NULLPTR(p_new_page_view);
-
-      return PinnedPage{p_new_page_view, std::move(*pinned_slot)};
+      return this->pin_allocated_page_to_cache(device_entry, page_size, *page_id, lru_priority);
     }
 
     if (wait_for_resource == batt::WaitForResource::kFalse) {
@@ -561,6 +531,75 @@ StatusOr<PinnedPage> PageCache::allocate_page_of_size_log2(PageSizeLog2 size_log
                      << BATT_INSPECT(wait_for_resource);
 
   return Status{batt::StatusCode::kUnavailable};  // TODO [tastolfi 2021-10-20]
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+StatusOr<PinnedPage> PageCache::allocate_filter_page_for(PageId page_id, LruPriority lru_priority)
+{
+  Optional<PageId> filter_page_id = this->filter_page_id_for(page_id);
+  if (!filter_page_id) {
+    return {batt::StatusCode::kUnavailable};
+  }
+
+  PageDeviceEntry* filter_device_entry = this->get_device_for_page(*filter_page_id);
+  BATT_CHECK_NOT_NULLPTR(filter_device_entry);
+
+  PageDevice* filter_page_device = std::addressof(filter_device_entry->arena.device());
+
+  return this->pin_allocated_page_to_cache(filter_device_entry, filter_page_device->page_size(),
+                                           *filter_page_id, lru_priority);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+void PageCache::async_write_filter_page(const PinnedPage& new_filter_page,
+                                        PageDevice::WriteHandler&& handler)
+{
+  PageDeviceEntry* filter_device_entry = this->get_device_for_page(new_filter_page.page_id());
+
+  filter_device_entry->arena.device().write(new_filter_page.get_page_buffer(), std::move(handler));
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+StatusOr<PinnedPage> PageCache::pin_allocated_page_to_cache(PageDeviceEntry* device_entry,
+                                                            PageSize page_size, PageId page_id,
+                                                            LruPriority lru_priority)
+{
+  PageArena& arena = device_entry->arena;
+
+  StatusOr<std::shared_ptr<PageBuffer>> new_page_buffer = arena.device().prepare(page_id);
+  BATT_REQUIRE_OK(new_page_buffer);
+
+  NewPageView* p_new_page_view = nullptr;
+
+  // PageDevice::prepare must be thread-safe.
+  //
+  StatusOr<PageCacheSlot::PinnedRef> pinned_slot = device_entry->cache.find_or_insert(
+      page_id, page_size, lru_priority,
+      /*initialize=*/
+      [&new_page_buffer, &p_new_page_view](const PageCacheSlot::PinnedRef& pinned_slot) {
+        // Create a NewPageView object as a placeholder so we can insert the new page into the
+        // cache.
+        //
+        std::shared_ptr<NewPageView> new_page_view =
+            std::make_shared<NewPageView>(std::move(*new_page_buffer));
+
+        // Save a pointer to the NewPageView to create the PinnedPage below.
+        //
+        p_new_page_view = new_page_view.get();
+
+        // Access the slot's Latch and set it.
+        //
+        batt::Latch<std::shared_ptr<const PageView>>* latch = pinned_slot.value();
+        latch->set_value(std::move(new_page_view));
+      });
+
+  BATT_REQUIRE_OK(pinned_slot);
+  BATT_CHECK_NOT_NULLPTR(p_new_page_view);
+
+  return PinnedPage{p_new_page_view, std::move(*pinned_slot)};
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

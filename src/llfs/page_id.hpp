@@ -127,6 +127,13 @@ inline usize hash_value(const PageId& page_id)
   return PageId::Hash{}(page_id);
 }
 
+BATT_ALWAYS_INLINE inline bool is_same_physical_page(const PageId& left, const PageId& right)
+{
+  static constexpr page_id_int kDeviceAndAddressMask = kPageIdDeviceMask | kPageIdAddressMask;
+
+  return (left.int_value() & kDeviceAndAddressMask) == (right.int_value() & kDeviceAndAddressMask);
+}
+
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 
 inline std::ostream& operator<<(std::ostream& out, const PageId& t)
