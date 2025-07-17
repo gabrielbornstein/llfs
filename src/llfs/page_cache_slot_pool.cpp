@@ -84,7 +84,7 @@ T getenv_log(const char* var_name, T default_value)
     , name_{std::move(name)}
     , slot_storage_{new SlotStorage[n_slots]}
 {
-  LLFS_LOG_INFO() << "PageCacheSlot::Pool created, n_slots=" << this->n_slots_;
+  LLFS_LOG_INFO_FIRST_N(10) << "PageCacheSlot::Pool created, n_slots=" << this->n_slots_;
   this->metrics_.total_capacity_allocated.add(this->max_byte_size_);
 }
 
@@ -206,7 +206,6 @@ PageCacheSlot* PageCacheSlot::Pool::allocate(PageSize page_size)
       if (!candidate->evict()) {
         continue;
       }
-      const i64 bytes_evicted = candidate->get_page_size_while_invalid();
 
       // If we don't have a slot to return yet, take this one; else add the just-evicted slot to
       // the free list so other threads can pick it up immediately.
@@ -215,10 +214,11 @@ PageCacheSlot* PageCacheSlot::Pool::allocate(PageSize page_size)
         free_slot = candidate;
         this->metrics_.allocate_evict_count.add(1);
       } else {
+        candidate->clear();
         this->push_free_slot(candidate);
       }
 
-      observed_resident_size = this->resident_size_.fetch_sub(bytes_evicted) - bytes_evicted;
+      observed_resident_size = this->resident_size_.load();
       if (observed_resident_size <= max_resident_size) {
         BATT_CHECK_NOT_NULLPTR(free_slot);
         break;

@@ -96,11 +96,7 @@ bool PageCacheSlot::evict()
     //
     const auto target_state = observed_state & ~kValidMask;
     if (this->state_.compare_exchange_weak(observed_state, target_state)) {
-      LLFS_PAGE_CACHE_ASSERT(!this->is_valid());
-
-      this->pool_.metrics().evict_count.add(1);
-      this->pool_.metrics().evict_byte_count.add(this->page_size_);
-
+      this->on_evict_success();
       return true;
     }
   }
@@ -142,10 +138,7 @@ bool PageCacheSlot::evict_if_key_equals(PageId key)
         << BATT_INSPECT(target_state);
 
     if (this->state_.compare_exchange_weak(observed_state, target_state)) {
-      BATT_CHECK(!Self::is_valid());
-
-      this->pool_.metrics().evict_count.add(1);
-      this->pool_.metrics().evict_byte_count.add(this->page_size_);
+      this->on_evict_success();
 
       // At this point, we always expect to be going from pinned to unpinned.
       // In order to successfully evict the slot, we must be holding the only pin,
@@ -159,11 +152,17 @@ bool PageCacheSlot::evict_if_key_equals(PageId key)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-PageSize PageCacheSlot::get_page_size_while_invalid() const
+void PageCacheSlot::on_evict_success()
 {
-  BATT_CHECK(!this->is_valid());
+  BATT_CHECK(!Self::is_valid());
 
-  return this->page_size_;
+  this->pool_.metrics().evict_count.add(1);
+  this->pool_.metrics().evict_byte_count.add(this->page_size_);
+  this->pool_.resident_size_.fetch_sub(this->page_size_);
+
+  this->value_ = None;
+  this->p_value_ = nullptr;
+  this->page_size_ = PageSize{0};
 }
 
 #if LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT

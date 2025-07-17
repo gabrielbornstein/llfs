@@ -25,6 +25,8 @@ namespace llfs {
 class PageCacheSlot::Pool : public boost::intrusive_ref_counter<Pool>
 {
  public:
+  friend class PageCacheSlot;
+
   using Self = Pool;
 
   /** \brief The default number of randomly-selected slots to consider when trying to evict a slot

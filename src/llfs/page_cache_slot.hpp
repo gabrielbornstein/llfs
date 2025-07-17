@@ -280,12 +280,6 @@ class PageCacheSlot
    */
   void clear();
 
-  /** \brief Returns the page size (if any) of the cached page for this slot.
-   *
-   * This function MUST be called while the slot is invalid, or we panic.
-   */
-  PageSize get_page_size_while_invalid() const;
-
   //----- --- -- -  -  -   -
 
   /** \brief Updates the latest use logical timestamp for this object, to make eviction less likely.
@@ -328,6 +322,10 @@ class PageCacheSlot
   /** \brief Sets the valid bit; Panic if the previous state was not Invalid.
    */
   void set_valid();
+
+  /** \brief Called when this slot is successfully evicted.
+   */
+  void on_evict_success();
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
