@@ -245,6 +245,11 @@ class PageCache : public PageLoader
     return this->metrics_;
   }
 
+  PageCacheSlot::Pool& slot_pool()
+  {
+    return *this->cache_slot_pool_;
+  }
+
   const PageCacheSlot::Pool::Metrics& slot_pool_metrics() const
   {
     return this->cache_slot_pool_->metrics();

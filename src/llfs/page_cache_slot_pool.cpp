@@ -331,4 +331,38 @@ bool PageCacheSlot::Pool::push_free_slot(PageCacheSlot* slot)
   return this->free_queue_.push(slot);
 }
 
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+auto PageCacheSlot::Pool::allocate_external(usize byte_size) -> ExternalAllocation
+{
+  BATT_CHECK_LE(byte_size, this->max_byte_size_);
+
+  const i64 max_resident_size = static_cast<i64>(this->max_byte_size_);
+  const i64 prior_resident_size = this->resident_size_.fetch_add(byte_size);
+  i64 observed_resident_size = prior_resident_size + byte_size;
+
+  if (observed_resident_size > max_resident_size && byte_size != 0) {
+    usize n_slots_constructed = this->n_constructed_.load();
+    batt::CpuCacheLineIsolated<PageCacheSlot>* const p_slots = this->slots();
+
+    while (observed_resident_size > max_resident_size) {
+      // Try to expire the next slot; if that succeeds, try evicting.
+      //
+      const usize slot_i = this->advance_clock_hand(n_slots_constructed);
+      PageCacheSlot* candidate = p_slots[slot_i].get();
+      if (!candidate->expire()) {
+        continue;
+      }
+      if (!candidate->evict()) {
+        continue;
+      }
+      candidate->clear();
+      this->push_free_slot(candidate);
+      observed_resident_size = this->resident_size_.load();
+    }
+  }
+
+  return ExternalAllocation{*this, byte_size};
+}
+
 }  //namespace llfs

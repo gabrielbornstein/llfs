@@ -98,6 +98,63 @@ class PageCacheSlot::Pool : public boost::intrusive_ref_counter<Pool>
     Metrics() = default;
   };
 
+  class ExternalAllocation
+  {
+   public:
+    friend class Pool;
+
+    ExternalAllocation() noexcept : pool_{nullptr}, size_{0}
+    {
+    }
+
+    ExternalAllocation(const ExternalAllocation&) = delete;
+    ExternalAllocation& operator=(const ExternalAllocation&) = delete;
+
+    ExternalAllocation(ExternalAllocation&& that) noexcept
+        : pool_{std::move(that.pool_)}
+        , size_{that.size_}
+    {
+      that.size_ = 0;
+    }
+
+    ExternalAllocation& operator=(ExternalAllocation&& that) noexcept
+    {
+      if (this != &that) {
+        this->release();
+        this->pool_ = std::move(that.pool_);
+        this->size_ = that.size_;
+        that.size_ = 0;
+      }
+      return *this;
+    }
+
+    ~ExternalAllocation() noexcept
+    {
+      this->release();
+    }
+
+    void release()
+    {
+      if (this->pool_) {
+        this->pool_->resident_size_.fetch_sub(this->size_);
+        this->pool_ = nullptr;
+      }
+    }
+
+    //+++++++++++-+-+--+----- --- -- -  -  -   -
+   private:
+    ExternalAllocation(Pool& pool, usize size) noexcept : pool_{&pool}, size_{size}
+    {
+    }
+
+    //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+    boost::intrusive_ptr<Pool> pool_;
+    usize size_;
+  };
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
   /** \brief Returns the default number of random eviction candidates to consider.
    *
    * Read from env var LLFS_CACHE_EVICTION_CANDIDATES if defined; otherwise
@@ -176,6 +233,18 @@ class PageCacheSlot::Pool : public boost::intrusive_ref_counter<Pool>
   {
     return this->metrics_;
   }
+
+  i64 get_resident_size() const
+  {
+    return this->resident_size_.load();
+  }
+
+  i64 get_max_byte_size() const
+  {
+    return this->max_byte_size_;
+  }
+
+  ExternalAllocation allocate_external(usize byte_size);
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
