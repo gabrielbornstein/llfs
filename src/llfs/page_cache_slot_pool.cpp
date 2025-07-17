@@ -84,6 +84,7 @@ T getenv_log(const char* var_name, T default_value)
     , name_{std::move(name)}
     , slot_storage_{new SlotStorage[n_slots]}
 {
+  LLFS_LOG_INFO() << "PageCacheSlot::Pool created, n_slots=" << this->n_slots_;
   this->metrics_.total_capacity_allocated.add(this->max_byte_size_);
 }
 
