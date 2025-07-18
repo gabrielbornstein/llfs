@@ -203,7 +203,7 @@ class PageCacheSlot
    * extension the pool that owns it) in scope, but it does not prevent the slot from being evicted
    * and refilled.  Think of this as a weak reference count.
    */
-  u64 ref_count() const;
+  u64 cache_slot_ref_count() const;
 
   /** \brief Adds a (weak/non-pinning) reference to the slot.
    *
@@ -263,6 +263,12 @@ class PageCacheSlot
   /** \brief Evicts the slot iff it is evict-able and the current key matches the passed value.
    */
   bool evict_if_key_equals(PageId key);
+
+  /** \brief Attempts to evict the slot; the caller must be holding a pin.  Ownership of the
+   * caller's pin is transferred to this function; the pin is released regardless of whether the
+   * eviction succeeded.
+   */
+  bool evict_and_release_pin();
 
   /** \brief Resets the key and value for this slot.
    *
@@ -332,9 +338,11 @@ class PageCacheSlot
   Pool& pool_;
   PageId key_;
   Optional<batt::Latch<std::shared_ptr<const PageView>>> value_;
-  batt::Latch<std::shared_ptr<const PageView>>* p_value_;
+  batt::Latch<std::shared_ptr<const PageView>>* p_value_ = nullptr;
   std::atomic<u64> state_{0};
+#if LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
   std::atomic<u64> ref_count_{0};
+#endif
   std::atomic<i64> latest_use_{0};
   PageSize page_size_{0};
 };
@@ -385,19 +393,23 @@ BATT_ALWAYS_INLINE inline u64 PageCacheSlot::pin_count() const
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-BATT_ALWAYS_INLINE inline u64 PageCacheSlot::ref_count() const
+BATT_ALWAYS_INLINE inline u64 PageCacheSlot::cache_slot_ref_count() const
 {
+#if LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
   return this->ref_count_.load(std::memory_order_acquire);
+#else
+  return 0;
+#endif
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 BATT_ALWAYS_INLINE inline void PageCacheSlot::add_ref()
 {
+#if LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
   [[maybe_unused]] const auto observed_count =
       this->ref_count_.fetch_add(1, std::memory_order_relaxed);
 
-#if LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
   if (observed_count == 0) {
     this->notify_first_ref_acquired();
   }
@@ -408,16 +420,16 @@ BATT_ALWAYS_INLINE inline void PageCacheSlot::add_ref()
 //
 BATT_ALWAYS_INLINE inline void PageCacheSlot::remove_ref()
 {
+#if LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
   const auto observed_count = this->ref_count_.fetch_sub(1, std::memory_order_release);
   LLFS_PAGE_CACHE_ASSERT_GT(observed_count, 0);
 
   if (observed_count == 1) {
     (void)this->ref_count_.load(std::memory_order_acquire);
 
-#if LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
     this->notify_last_ref_released();
-#endif  // LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
   }
+#endif  // LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -

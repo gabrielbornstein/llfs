@@ -105,39 +105,33 @@ batt::StatusOr<PageCacheSlot::PinnedRef> PageDeviceCache::find_or_insert(
               ::llfs::make_status(StatusCode::kPageCacheSlotNotInitialized));
         }
 
-        // Before we go to the trouble of allocating a new slot (or evicting the contents of an
-        // existing one), check to see whether this slot contains an older generation of the same
-        // PageId; if so, then we should evict *this* slot.
+        // If the pinned slot is an exact match, then return with success.
         //
-        if (kEvictOldGenSlot) {
-          const PageId pinned_page_id = pinned.key();
-          if (pinned_page_id != key) {
-            pinned.reset();
+        if (!kEvictOldGenSlot || pinned.key() == key) {
+          // Refresh the LTS.
+          //
+          slot->update_latest_use(lru_priority);
 
-            // Yes, it is an old generation of the same page!  Attempt to evict and reuse this slot.
-            //
-            if (slot->evict_if_key_equals(pinned_page_id)) {
-              BATT_DEBUG_INFO("evicting old generation slot");
-
-              this->metrics().evict_prior_generation_count.add(1);
-              new_slot.emplace();
-              new_slot->p_slot = slot;
-              new_slot->pinned_ref = slot->fill(key, page_size, lru_priority);
-
-              LLFS_PAGE_CACHE_ASSERT_EQ(new_slot->p_slot, observed_slot_ptr);
-              break;
-            }
-          }
+          // Done! (Found existing value)
+          //
+          this->metrics().hit_count.add(1);
+          return {std::move(pinned)};
         }
 
-        // Refresh the LTS.
+        // Yes, it is an old generation of the same page!  Attempt to evict and reuse this slot.
         //
-        slot->update_latest_use(lru_priority);
+        pinned.release_ownership_of_pin();
+        if (slot->evict_and_release_pin()) {
+          this->metrics().evict_prior_generation_count.add(1);
+          new_slot.emplace();
+          new_slot->p_slot = slot;
+          new_slot->pinned_ref = slot->fill(key, page_size, lru_priority);
 
-        // Done! (Found existing value)
+          LLFS_PAGE_CACHE_ASSERT_EQ(new_slot->p_slot, observed_slot_ptr);
+          break;
+        }
         //
-        this->metrics().hit_count.add(1);
-        return {std::move(pinned)};
+        // Eviction failed; we need to treat this branch and what follows *as if* !pinned.
       }
       this->metrics().stale_count.add(1);
     }
@@ -146,8 +140,6 @@ batt::StatusOr<PageCacheSlot::PinnedRef> PageDeviceCache::find_or_insert(
     // into the cache array.
     //
     if (!new_slot) {
-      BATT_DEBUG_INFO("allocating fresh slot");
-
       new_slot.emplace();
       new_slot->p_slot = this->slot_pool_->allocate(page_size);
       if (!new_slot->p_slot) {

@@ -92,6 +92,12 @@ class PageCacheSlot::PinnedRef : public boost::equality_comparable<PageCacheSlot
     }
   }
 
+  void release_ownership_of_pin()
+  {
+    this->slot_ = nullptr;
+    this->value_ = nullptr;
+  }
+
   void swap(PinnedRef& that)
   {
     std::swap(this->slot_, that.slot_);
@@ -138,9 +144,9 @@ class PageCacheSlot::PinnedRef : public boost::equality_comparable<PageCacheSlot
     return this->slot_ ? this->slot_->pin_count() : 0;
   }
 
-  u64 ref_count() const noexcept
+  u64 cache_slot_ref_count() const noexcept
   {
-    return this->slot_ ? this->slot_->ref_count() : 0;
+    return this->slot_ ? this->slot_->cache_slot_ref_count() : 0;
   }
 
  private:
