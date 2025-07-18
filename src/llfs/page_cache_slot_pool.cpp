@@ -333,19 +333,62 @@ bool PageCacheSlot::Pool::push_free_slot(PageCacheSlot* slot)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
+Status PageCacheSlot::Pool::set_max_byte_size(usize new_size_limit)
+{
+  const usize old_max_byte_size = this->max_byte_size_.exchange(new_size_limit);
+  if (old_max_byte_size == new_size_limit) {
+    return OkStatus();
+  }
+
+  const usize n_slots_constructed = this->n_constructed_.load();
+  const usize max_steps = n_slots_constructed * 4;
+
+  Status status = this->enforce_max_size(this->resident_size_.load(), max_steps);
+  if (!status.ok()) {
+    usize expected = new_size_limit;
+    do {
+      if (this->max_byte_size_.compare_exchange_weak(expected, old_max_byte_size)) {
+        break;
+      }
+    } while (expected == new_size_limit);
+  }
+
+  BATT_REQUIRE_OK(status);
+
+  return OkStatus();
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
 auto PageCacheSlot::Pool::allocate_external(usize byte_size) -> ExternalAllocation
 {
   BATT_CHECK_LE(byte_size, this->max_byte_size_);
 
-  const i64 max_resident_size = static_cast<i64>(this->max_byte_size_);
   const i64 prior_resident_size = this->resident_size_.fetch_add(byte_size);
   i64 observed_resident_size = prior_resident_size + byte_size;
+
+  BATT_CHECK_OK(this->enforce_max_size(observed_resident_size));
+
+  return ExternalAllocation{*this, byte_size};
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+Status PageCacheSlot::Pool::enforce_max_size(i64 observed_resident_size, usize max_steps)
+{
+  const i64 max_resident_size = static_cast<i64>(this->max_byte_size_);
 
   if (observed_resident_size > max_resident_size && byte_size != 0) {
     usize n_slots_constructed = this->n_constructed_.load();
     batt::CpuCacheLineIsolated<PageCacheSlot>* const p_slots = this->slots();
 
+    usize step_count = 0;
     while (observed_resident_size > max_resident_size) {
+      ++step_count;
+      if (max_steps && step_count > max_steps) {
+        return batt::StatusCode::kResourceExhausted;
+      }
+
       // Try to expire the next slot; if that succeeds, try evicting.
       //
       const usize slot_i = this->advance_clock_hand(n_slots_constructed);
@@ -362,7 +405,7 @@ auto PageCacheSlot::Pool::allocate_external(usize byte_size) -> ExternalAllocati
     }
   }
 
-  return ExternalAllocation{*this, byte_size};
+  return OkStatus();
 }
 
 }  //namespace llfs

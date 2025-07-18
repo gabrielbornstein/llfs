@@ -250,6 +250,8 @@ class PageCacheSlot::Pool : public boost::intrusive_ref_counter<Pool>
     return this->max_byte_size_;
   }
 
+  Status set_max_byte_size(usize new_size_limit);
+
   ExternalAllocation allocate_external(usize byte_size);
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -273,10 +275,15 @@ class PageCacheSlot::Pool : public boost::intrusive_ref_counter<Pool>
    */
   usize advance_clock_hand(usize& n_slots_constructed);
 
+  /** \brief If the passed observed size is over the limit, evict pages until resident size is at or
+   * below the maximum size.
+   */
+  Status enforce_max_size(i64 observed_resident_size, usize max_steps = 0);
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   const usize n_slots_;
-  const usize max_byte_size_;
+  std::atomic<usize> max_byte_size_;
   const std::string name_;
   std::unique_ptr<SlotStorage[]> slot_storage_;
   std::atomic<i64> resident_size_{0};
