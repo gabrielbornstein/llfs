@@ -117,6 +117,8 @@ batt::StatusOr<PageCacheSlot::PinnedRef> PageDeviceCache::find_or_insert(
             // Yes, it is an old generation of the same page!  Attempt to evict and reuse this slot.
             //
             if (slot->evict_if_key_equals(pinned_page_id)) {
+              BATT_DEBUG_INFO("evicting old generation slot");
+
               this->metrics().evict_prior_generation_count.add(1);
               new_slot.emplace();
               new_slot->p_slot = slot;
@@ -144,6 +146,8 @@ batt::StatusOr<PageCacheSlot::PinnedRef> PageDeviceCache::find_or_insert(
     // into the cache array.
     //
     if (!new_slot) {
+      BATT_DEBUG_INFO("allocating fresh slot");
+
       new_slot.emplace();
       new_slot->p_slot = this->slot_pool_->allocate(page_size);
       if (!new_slot->p_slot) {
