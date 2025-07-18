@@ -85,7 +85,7 @@ T getenv_log(const char* var_name, T default_value)
     , slot_storage_{new SlotStorage[n_slots]}
 {
   LLFS_LOG_INFO_FIRST_N(10) << "PageCacheSlot::Pool created, n_slots=" << this->n_slots_;
-  this->metrics_.total_capacity_allocated.add(this->max_byte_size_);
+  this->metrics_.total_capacity_allocated.add(this->max_byte_size_.load());
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -107,7 +107,9 @@ PageCacheSlot::Pool::~Pool() noexcept
     }
   }
 
-  this->metrics_.total_capacity_freed.add(this->max_byte_size_);
+  // TODO [tastolfi 2025-07-18] max_byte_size_ may have changed -- fix this!
+  //
+  this->metrics_.total_capacity_freed.add(this->max_byte_size_.load());
 
   LLFS_VLOG(1) << "PageCacheSlot::Pool::~Pool()";
 }
@@ -362,13 +364,14 @@ Status PageCacheSlot::Pool::set_max_byte_size(usize new_size_limit)
 //
 auto PageCacheSlot::Pool::allocate_external(usize byte_size) -> ExternalAllocation
 {
-  BATT_CHECK_LE(byte_size, this->max_byte_size_);
+  if (byte_size != 0) {
+    BATT_CHECK_LE(byte_size, this->max_byte_size_);
 
-  const i64 prior_resident_size = this->resident_size_.fetch_add(byte_size);
-  i64 observed_resident_size = prior_resident_size + byte_size;
+    const i64 prior_resident_size = this->resident_size_.fetch_add(byte_size);
+    i64 observed_resident_size = prior_resident_size + byte_size;
 
-  BATT_CHECK_OK(this->enforce_max_size(observed_resident_size));
-
+    BATT_CHECK_OK(this->enforce_max_size(observed_resident_size));
+  }
   return ExternalAllocation{*this, byte_size};
 }
 
@@ -378,7 +381,7 @@ Status PageCacheSlot::Pool::enforce_max_size(i64 observed_resident_size, usize m
 {
   const i64 max_resident_size = static_cast<i64>(this->max_byte_size_);
 
-  if (observed_resident_size > max_resident_size && byte_size != 0) {
+  if (observed_resident_size > max_resident_size) {
     usize n_slots_constructed = this->n_constructed_.load();
     batt::CpuCacheLineIsolated<PageCacheSlot>* const p_slots = this->slots();
 
