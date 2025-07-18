@@ -118,8 +118,9 @@ batt::StatusOr<PageCacheSlot::PinnedRef> PageDeviceCache::find_or_insert(
           return {std::move(pinned)};
         }
 
-        // Yes, it is an old generation of the same page!  Attempt to evict and reuse this slot.
+        // It is an old generation of the same page!  Attempt to evict and reuse this slot.
         //
+        BATT_CHECK(is_same_physical_page(pinned.key(), key));
         pinned.release_ownership_of_pin();
         if (slot->evict_and_release_pin()) {
           this->metrics().evict_prior_generation_count.add(1);
