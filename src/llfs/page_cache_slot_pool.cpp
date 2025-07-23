@@ -149,7 +149,11 @@ PageCacheSlot* PageCacheSlot::Pool::allocate(PageSize page_size)
 
   // Before constructing _new_ slots, try popping one from the free queue.
   //
-  while (this->free_queue_.pop(free_slot)) {
+  for (;;) {
+    if (!this->free_queue_.pop(free_slot)) {
+      free_slot = nullptr;
+      break;
+    }
     BATT_CHECK_NOT_NULLPTR(free_slot);
     this->metrics_.free_queue_remove_count.add(1);
     if (free_slot->evict()) {
