@@ -9,6 +9,7 @@
 #include <llfs/page_cache_job.hpp>
 //
 
+#include <llfs/new_page_view.hpp>
 #include <llfs/trace_refs_recursive.hpp>
 
 #include <batteries/async/backoff.hpp>
@@ -121,24 +122,29 @@ bool PageCacheJob::is_page_new_and_pinned(PageId page_id) const
 //
 StatusOr<std::shared_ptr<PageBuffer>> PageCacheJob::new_page(
     PageSize size, batt::WaitForResource wait_for_resource, const PageLayoutId& layout_id,
-    u64 callers, const batt::CancelToken& cancel_token)
+    LruPriority lru_priority, u64 callers, const batt::CancelToken& cancel_token)
 {
   // TODO [tastolfi 2021-04-07] instead of WaitForResource::kTrue, implement a backoff-and-retry
   // loop with a cancel token.
   //
-  StatusOr<std::shared_ptr<PageBuffer>> buffer = this->cache_->allocate_page_of_size(
-      size, wait_for_resource, callers | Caller::PageCacheJob_new_page, this->job_id, cancel_token);
+  StatusOr<PinnedPage> pinned_page = this->cache_->allocate_page_of_size(
+      size, wait_for_resource, lru_priority, callers | Caller::PageCacheJob_new_page, this->job_id,
+      cancel_token);
 
-  BATT_REQUIRE_OK(buffer);
+  BATT_REQUIRE_OK(pinned_page);
+  BATT_CHECK(*pinned_page);
 
-  const PageId page_id = buffer->get()->page_id();
+  std::shared_ptr<PageBuffer> buffer =
+      BATT_OK_RESULT_OR_PANIC(pinned_page->get()->get_new_page_buffer());
+
+  const PageId page_id = buffer->page_id();
   {
-    PackedPageHeader* const header = mutable_page_header(buffer->get());
+    PackedPageHeader* const header = mutable_page_header(buffer.get());
     header->layout_id = layout_id;
   }
 
   this->pruned_ = false;
-  this->new_pages_.emplace(page_id, NewPage{batt::make_copy(*buffer)});
+  this->new_pages_.emplace(page_id, NewPage{std::move(*pinned_page)});
 
   return buffer;
 }
@@ -174,9 +180,10 @@ StatusOr<PinnedPage> PageCacheJob::pin_new(std::shared_ptr<PageView>&& page_view
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 StatusOr<PinnedPage> PageCacheJob::pin_new_impl(
-    std::shared_ptr<PageView>&& page_view, LruPriority lru_priority, u64 callers,
+    std::shared_ptr<PageView>&& page_view, LruPriority lru_priority [[maybe_unused]],
+    u64 callers [[maybe_unused]],
     std::function<StatusOr<PinnedPage>(const std::function<StatusOr<PinnedPage>()>&)>&&
-        put_with_retry)
+        put_with_retry [[maybe_unused]])
 {
   BATT_CHECK_NOT_NULLPTR(page_view);
 
@@ -195,25 +202,8 @@ StatusOr<PinnedPage> PageCacheJob::pin_new_impl(
   bool set_view_ok = new_page.set_view(batt::make_copy(page_view));
   BATT_CHECK(set_view_ok) << "pin_new called multiple times for the same page!";
 
-  // Insert the page into the main cache.  Since page_ids are universally unique, there is no
-  // problem doing this even before the page has been durably written to storage.
-  //
-  // TODO [tastolfi 2022-09-19] once WaitForResource param is added to Cache<T>::find_or_insert,
-  // remove this backoff polling loop.
-  //
-  StatusOr<PinnedPage> pinned_page = put_with_retry([&] {
-    return this->cache_->put_view(batt::make_copy(page_view), lru_priority,
-                                  callers | Caller::PageCacheJob_pin_new, this->job_id);
-  });
-
-  LLFS_LOG_INFO_IF(this->debug_mask.test(kDebugLogCacheSlotsFull) && !pinned_page.ok() &&
-                   pinned_page.status() == ::llfs::make_status(StatusCode::kCacheSlotsFull))
-      << "Failed to pin new page (cache slots full)\n"
-      << boost::stacktrace::stacktrace{};
-
-  BATT_REQUIRE_OK(pinned_page) << batt::LogLevel::kInfo << "Failed to pin page " << id
-                               << ", reason: " << pinned_page.status()
-                               << BATT_INSPECT(page_view->get_page_layout_id());
+  StatusOr<PinnedPage> pinned_page = new_page.get_pinned_page();
+  BATT_CHECK_OK(pinned_page);
 
   // Add to the pinned set.
   //
@@ -469,11 +459,9 @@ Status PageCacheJob::recover_page(PageId page_id,
 
   BATT_REQUIRE_OK(pinned_page);
 
-  const auto& [iter, inserted] = this->new_pages_.emplace(page_id, NewPage{/*buffer=*/nullptr});
-  if (inserted) {
-    iter->second.set_view(pinned_page->get_shared_view());
-  }
+  BATT_CHECK_NE(pinned_page->get()->get_page_layout_id(), NewPageView::page_layout_id());
 
+  this->new_pages_.emplace(page_id, NewPage{std::move(*pinned_page)});
   this->recovered_pages_.emplace(page_id);
 
   return OkStatus();
@@ -606,6 +594,7 @@ StatusOr<usize> PageCacheJob::prune(u64 callers)
     this->pinned_.erase(id);
     this->deferred_new_pages_.erase(id);
     this->cache_->deallocate_page(id, callers | Caller::PageCacheJob_prune, this->job_id);
+    LOG(INFO) << "deallocate_page(" << id << ")";
   }
 
   BATT_CHECK(this->deferred_new_pages_.empty());
@@ -621,42 +610,42 @@ StatusOr<usize> PageCacheJob::prune(u64 callers)
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-PageCacheJob::NewPage::NewPage(std::shared_ptr<PageBuffer>&& buffer) noexcept
-    : buffer_{std::move(buffer)}
-    , view_{}
+PageCacheJob::NewPage::NewPage(PinnedPage&& pinned_page) noexcept
+    : pinned_page_{std::move(pinned_page)}
+    , has_view_{false}
 {
+  BATT_CHECK(this->pinned_page_);
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 bool PageCacheJob::NewPage::set_view(std::shared_ptr<const PageView>&& v)
 {
-  if (this->view_) {
-    return false;
+  if (!this->has_view_) {
+    this->has_view_ = this->pinned_page_->set_new_page_view(std::move(v)).ok();
   }
-  this->view_.emplace(std::move(v));
-  return true;
+  return this->has_view_;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 bool PageCacheJob::NewPage::has_view() const
 {
-  return this->view_ && (*this->view_ != nullptr);
+  return this->has_view_;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 std::shared_ptr<const PageView> PageCacheJob::NewPage::view() const
 {
-  return this->view_.value_or(nullptr);
+  return this->pinned_page_.get_shared_view();
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 std::shared_ptr<PageBuffer> PageCacheJob::NewPage::buffer() const
 {
-  return this->buffer_;
+  return BATT_OK_RESULT_OR_PANIC(this->pinned_page_->get_new_page_buffer());
 }
 
 }  // namespace llfs

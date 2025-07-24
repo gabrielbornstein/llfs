@@ -56,7 +56,7 @@ batt::StatusOr<PageCacheSlot::PinnedRef> PageDeviceCache::find_or_insert(
     const batt::SmallFn<void(const PageCacheSlot::PinnedRef&)>& initialize)
 {
   static const bool kEvictOldGenSlot =
-      batt::getenv_as<bool>("LLFS_EVICT_OLD_GEN_SLOT").value_or(false);
+      batt::getenv_as<bool>("LLFS_EVICT_OLD_GEN_SLOT").value_or(true);
 
   LLFS_PAGE_CACHE_ASSERT_EQ(PageIdFactory::get_device_id(key), this->page_ids_.get_device_id());
   this->metrics().query_count.add(1);
@@ -90,7 +90,8 @@ batt::StatusOr<PageCacheSlot::PinnedRef> PageDeviceCache::find_or_insert(
       // if it still contains the desired page.
       //
       PageCacheSlot* slot = observed_slot_ptr;
-      PageCacheSlot::PinnedRef pinned = slot->acquire_pin(key);
+      PageCacheSlot::PinnedRef pinned =
+          slot->acquire_pin(key, IgnoreKey{false}, IgnoreGeneration{kEvictOldGenSlot});
       if (pinned) {
         if (new_slot) {
           LLFS_PAGE_CACHE_ASSERT(new_slot->pinned_ref);
@@ -104,39 +105,34 @@ batt::StatusOr<PageCacheSlot::PinnedRef> PageDeviceCache::find_or_insert(
               ::llfs::make_status(StatusCode::kPageCacheSlotNotInitialized));
         }
 
-        // Refresh the LTS.
+        // If the pinned slot is an exact match, then return with success.
         //
-        slot->update_latest_use(lru_priority);
+        if (!kEvictOldGenSlot || pinned.key() == key) {
+          // Refresh the LTS.
+          //
+          slot->update_latest_use(lru_priority);
 
-        // Done! (Found existing value)
-        //
-        this->metrics().hit_count.add(1);
-        return {std::move(pinned)};
-
-      } else if (kEvictOldGenSlot) {
-        // Before we go to the trouble of allocating a new slot (or evicting the contents of an
-        // existing one), check to see whether this slot contains an older generation of the same
-        // PageId; if so, then we should evict *this* slot.
-        //
-        pinned = slot->acquire_pin(key, /*ignore_key=*/true);
-        if (pinned) {
-          const PageId old_page_id = pinned.key();
-          if (this->page_ids_.is_same_physical_page(old_page_id, key)) {
-            pinned.reset();
-
-            // Yes, it is an old generation of the same page!  Attempt to evict and reuse this slot.
-            //
-            if (slot->evict_if_key_equals(old_page_id)) {
-              this->metrics().evict_prior_generation_count.add(1);
-              new_slot.emplace();
-              new_slot->p_slot = slot;
-              new_slot->pinned_ref = slot->fill(key, page_size, lru_priority);
-
-              LLFS_PAGE_CACHE_ASSERT_EQ(new_slot->p_slot, observed_slot_ptr);
-              break;
-            }
-          }
+          // Done! (Found existing value)
+          //
+          this->metrics().hit_count.add(1);
+          return {std::move(pinned)};
         }
+
+        // It is an old generation of the same page!  Attempt to evict and reuse this slot.
+        //
+        BATT_CHECK(is_same_physical_page(pinned.key(), key));
+        pinned.release_ownership_of_pin();
+        if (slot->evict_and_release_pin()) {
+          this->metrics().evict_prior_generation_count.add(1);
+          new_slot.emplace();
+          new_slot->p_slot = slot;
+          new_slot->pinned_ref = slot->fill(key, page_size, lru_priority);
+
+          LLFS_PAGE_CACHE_ASSERT_EQ(new_slot->p_slot, observed_slot_ptr);
+          break;
+        }
+        //
+        // Eviction failed; we need to treat this branch and what follows *as if* !pinned.
       }
       this->metrics().stale_count.add(1);
     }
@@ -146,7 +142,7 @@ batt::StatusOr<PageCacheSlot::PinnedRef> PageDeviceCache::find_or_insert(
     //
     if (!new_slot) {
       new_slot.emplace();
-      new_slot->p_slot = this->slot_pool_->allocate();
+      new_slot->p_slot = this->slot_pool_->allocate(page_size);
       if (!new_slot->p_slot) {
         this->metrics().full_count.add(1);
         return ::llfs::make_status(StatusCode::kCacheSlotsFull);
@@ -252,7 +248,7 @@ void PageDeviceCache::erase(PageId key)
     // `key` but is non-evictable (because there are outstanding pins); if this is the case, then
     // clear it from our table.
     //
-    PageCacheSlot::PinnedRef pinned = slot->acquire_pin(PageId{}, /*ignore_key=*/true);
+    PageCacheSlot::PinnedRef pinned = slot->acquire_pin(PageId{}, IgnoreKey{true});
     if (pinned) {
       const PageId observed_key = pinned.key();
       if (!observed_key.is_valid() || observed_key == key ||

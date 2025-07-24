@@ -25,6 +25,8 @@ namespace llfs {
 class PageCacheSlot::Pool : public boost::intrusive_ref_counter<Pool>
 {
  public:
+  friend class PageCacheSlot;
+
   using Self = Pool;
 
   /** \brief The default number of randomly-selected slots to consider when trying to evict a slot
@@ -46,7 +48,13 @@ class PageCacheSlot::Pool : public boost::intrusive_ref_counter<Pool>
     FastCountMetric<i64> query_count{0};
     FastCountMetric<i64> hit_count{0};
     FastCountMetric<i64> stale_count{0};
-    FastCountMetric<i64> alloc_count{0};
+    FastCountMetric<i64> allocate_count{0};
+    FastCountMetric<i64> allocate_free_queue_count{0};
+    FastCountMetric<i64> allocate_construct_count{0};
+    FastCountMetric<i64> allocate_evict_count{0};
+    FastCountMetric<i64> construct_count{0};
+    FastCountMetric<i64> free_queue_insert_count{0};
+    FastCountMetric<i64> free_queue_remove_count{0};
     FastCountMetric<i64> evict_count{0};
     FastCountMetric<i64> evict_prior_generation_count{0};
     FastCountMetric<i64> admit_count{0};
@@ -58,14 +66,6 @@ class PageCacheSlot::Pool : public boost::intrusive_ref_counter<Pool>
     FastCountMetric<i64> admit_byte_count{0};
     FastCountMetric<i64> erase_byte_count{0};
     FastCountMetric<i64> evict_byte_count{0};
-
-    FastCountMetric<i64> evict_lru_count{0};
-
-    CountMetric<i64> background_evict_count{0};
-    CountMetric<i64> background_evict_fail_count{0};
-    CountMetric<i64> background_evict_byte_count{0};
-    LatencyMetric background_evict_latency;
-    LatencyMetric background_evict_byte_latency;
 
     CountMetric<i64> total_capacity_allocated{0};
     CountMetric<i64> total_capacity_freed{0};
@@ -98,6 +98,69 @@ class PageCacheSlot::Pool : public boost::intrusive_ref_counter<Pool>
     Metrics() = default;
   };
 
+  class ExternalAllocation
+  {
+   public:
+    friend class Pool;
+
+    ExternalAllocation() noexcept : pool_{nullptr}, size_{0}
+    {
+    }
+
+    ExternalAllocation(const ExternalAllocation&) = delete;
+    ExternalAllocation& operator=(const ExternalAllocation&) = delete;
+
+    ExternalAllocation(ExternalAllocation&& that) noexcept
+        : pool_{std::move(that.pool_)}
+        , size_{that.size_}
+    {
+      that.pool_ = nullptr;
+      that.size_ = 0;
+    }
+
+    ExternalAllocation& operator=(ExternalAllocation&& that) noexcept
+    {
+      if (this != &that) {
+        this->release();
+
+        this->pool_ = std::move(that.pool_);
+        this->size_ = that.size_;
+
+        that.pool_ = nullptr;
+        that.size_ = 0;
+      }
+      return *this;
+    }
+
+    ~ExternalAllocation() noexcept
+    {
+      this->release();
+    }
+
+    void release()
+    {
+      if (this->pool_) {
+        const i64 prior_resident_size = this->pool_->resident_size_.fetch_sub(this->size_);
+        BATT_CHECK_GE(prior_resident_size, (i64)this->size_);
+        this->pool_ = nullptr;
+        this->size_ = 0;
+      }
+    }
+
+    //+++++++++++-+-+--+----- --- -- -  -  -   -
+   private:
+    ExternalAllocation(Pool& pool, usize size) noexcept : pool_{&pool}, size_{size}
+    {
+    }
+
+    //+++++++++++-+-+--+----- --- -- -  -  -   -
+
+    boost::intrusive_ptr<Pool> pool_;
+    usize size_;
+  };
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
+
   /** \brief Returns the default number of random eviction candidates to consider.
    *
    * Read from env var LLFS_CACHE_EVICTION_CANDIDATES if defined; otherwise
@@ -105,19 +168,17 @@ class PageCacheSlot::Pool : public boost::intrusive_ref_counter<Pool>
    */
   static usize default_eviction_candidate_count();
 
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-
   /** \brief Creates a new PageCacheSlot::Pool.
    *
    * Objects of this type MUST be managed via boost::intrusive_ptr<Pool>.
    */
   static boost::intrusive_ptr<Pool> make_new(SlotCount n_slots, MaxCacheSizeBytes max_byte_size,
-                                             std::string&& name,
-                                             Optional<SlotCount> eviction_candidates = None)
+                                             std::string&& name)
   {
-    return boost::intrusive_ptr<Pool>{
-        new Pool{n_slots, max_byte_size, std::move(name), eviction_candidates}};
+    return boost::intrusive_ptr<Pool>{new Pool{n_slots, max_byte_size, std::move(name)}};
   }
+
+  //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   /** \brief Destroys a PageCacheSlot pool.
    *
@@ -146,7 +207,7 @@ class PageCacheSlot::Pool : public boost::intrusive_ref_counter<Pool>
    * Thereafter, it will attempt to evict an unpinned slot that hasn't been used recently.  If no
    * such slot can be found, `nullptr` will be returned.
    */
-  PageCacheSlot* allocate();
+  PageCacheSlot* allocate(PageSize size_needed);
 
   /** \brief Returns the index of the specified slot object.
    *
@@ -179,50 +240,58 @@ class PageCacheSlot::Pool : public boost::intrusive_ref_counter<Pool>
     return this->metrics_;
   }
 
+  i64 get_resident_size() const
+  {
+    return this->resident_size_.load();
+  }
+
+  i64 get_max_byte_size() const
+  {
+    return this->max_byte_size_;
+  }
+
+  Status set_max_byte_size(usize new_size_limit);
+
+  ExternalAllocation allocate_external(usize byte_size);
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
  private:
   /** \brief Constructs a new Pool with capacity for `n_slots` cached pages.
    */
-  explicit Pool(SlotCount n_slots, MaxCacheSizeBytes max_byte_size, std::string&& name,
-                Optional<SlotCount> eviction_candidates) noexcept;
+  explicit Pool(SlotCount n_slots, MaxCacheSizeBytes max_byte_size, std::string&& name) noexcept;
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   batt::CpuCacheLineIsolated<PageCacheSlot>* slots();
 
-  /** \brief Selects `k` allocated slots at random, passing each to `fn`.
+  /** \brief Attempts to construct a new slot; returns non-null if successful.
    */
-  template <typename Fn /*=void(PageCacheSlot*)*/>
-  void pick_k_random_slots(usize k, Fn&& fn, usize shard_i = 0, usize n_shards = 1);
+  PageCacheSlot* construct_new_slot();
 
-  /** \brief Tries to find a slot that hasn't been used in a while to evict.
+  /** \brief Steps the clock hand forward by 1, returning the new value.
    *
-   * Will keep on looping until it has made one attempt for each slot in the cache.  At that point,
-   * we just give up and return nullptr.
+   * Automatically handles wrap-around; may update n_slots_constructed if possible wrap-around
+   * detected.
    */
-  PageCacheSlot* evict_lru();
+  usize advance_clock_hand(usize& n_slots_constructed);
 
-  /** \brief The entry point for a background eviction thread.
-   *
-   * Polls periodically (with random jitter) to see whether the delta between
-   * this->metrics_.admit_byte_count and this->metrics_.evict_byte_count has become too large.  If
-   * so, continues to call evict_lru until the problem has been corrected.
+  /** \brief If the passed observed size is over the limit, evict pages until resident size is at or
+   * below the maximum size.
    */
-  void background_eviction_thread_main(usize thread_i, usize n_threads);
+  Status enforce_max_size(i64 observed_resident_size, usize max_steps = 0);
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   const usize n_slots_;
-  const usize max_byte_size_;
-  const usize eviction_candidates_;
+  std::atomic<usize> max_byte_size_;
   const std::string name_;
   std::unique_ptr<SlotStorage[]> slot_storage_;
+  std::atomic<i64> resident_size_{0};
+  std::atomic<usize> clock_hand_{0};
   std::atomic<usize> n_allocated_{0};
-  batt::Watch<usize> n_constructed_{0};
+  std::atomic<usize> n_constructed_{0};
   std::atomic<bool> halt_requested_;
   Metrics& metrics_ = Metrics::instance();
-  std::mutex background_threads_mutex_;
-  std::vector<std::thread> background_eviction_threads_;
   boost::lockfree::queue<PageCacheSlot*, boost::lockfree::capacity<32768>,
                          boost::lockfree::fixed_sized<true>>
       free_queue_;

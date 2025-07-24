@@ -12,6 +12,7 @@
 #include <llfs/config.hpp>
 #include <llfs/page_layout.hpp>
 
+#include <batteries/env.hpp>
 #include <batteries/math.hpp>
 #include <batteries/suppress.hpp>
 
@@ -33,10 +34,22 @@ struct PoolContext {
   std::atomic<usize> size{0};
 };
 
+bool enable_page_buffer_pool()
+{
+  static const bool b_ = [] {
+    const char* const varname = "LLFS_ENABLE_PAGE_BUFFER_POOL";
+    const bool b = batt::getenv_as<bool>(varname).value_or(kEnablePageBufferPoolByDefault);
+    LOG(INFO) << varname << "=" << b;
+    return b;
+  }();
+
+  return b_;
+}
+
 static PoolContext& pool_for_size(usize size)
 {
   static std::array<PoolContext*, kPageBufferPoolLevels>& context_ = []() -> decltype(auto) {
-    BATT_CHECK(kEnablePageBufferPool);
+    BATT_CHECK(enable_page_buffer_pool());
 
     static std::array<PoolContext*, kPageBufferPoolLevels> context_;
     context_.fill(nullptr);
@@ -87,7 +100,7 @@ void PageBuffer::set_page_id(PageId id)
 {
   PageBuffer* obj = nullptr;
   [&obj, page_size] {
-    if (kEnablePageBufferPool) {
+    if (enable_page_buffer_pool()) {
       PoolContext& pool = pool_for_size(page_size);
       if (pool.arena.pop(obj)) {
         pool.size.fetch_sub(1);
@@ -119,7 +132,7 @@ void PageBuffer::set_page_id(PageId id)
 //
 /*static*/ void PageBuffer::deallocate(PageSize page_size, void* ptr)
 {
-  if (kEnablePageBufferPool) {
+  if (enable_page_buffer_pool()) {
     PageBuffer* obj = reinterpret_cast<PageBuffer*>(ptr);
     if (obj) {
       auto& pool = pool_for_size(page_size);

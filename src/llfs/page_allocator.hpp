@@ -167,8 +167,15 @@ class PageAllocator
   auto debug_info()
   {
     return [this](std::ostream& out) {
-      out << "PageAllocator{.page_size=" << batt::dump_size(this->page_size())
-          << ", .free=" << this->free_pool_size() << "/" << this->page_device_capacity() << ",}";
+      const auto page_size_bytes = this->page_size();
+      const auto free_count = this->free_pool_size();
+      const auto total_count = this->page_device_capacity();
+      const auto in_use_count = total_count - free_count;
+      const auto in_use_bytes = in_use_count * page_size_bytes;
+
+      out << "PageAllocator{.page_size=" << batt::dump_size(page_size_bytes)
+          << ", .free=" << free_count << "/" << total_count << ", .in_use=" << in_use_count
+          << ", .in_use_bytes=" << in_use_bytes << "(" << batt::dump_size(in_use_bytes) << "),}";
     };
   }
 

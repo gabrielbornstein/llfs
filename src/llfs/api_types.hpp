@@ -133,6 +133,10 @@ BATT_STRONG_TYPEDEF(usize, MaxCacheSizeBytes);
  */
 BATT_STRONG_TYPEDEF(i64, LruPriority);
 
+BATT_STRONG_TYPEDEF(bool, IgnoreKey);
+
+BATT_STRONG_TYPEDEF(bool, IgnoreGeneration);
+
 }  // namespace llfs
 
 #endif  // LLFS_API_TYPES_HPP

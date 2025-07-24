@@ -152,6 +152,21 @@ class PageView
   //
   virtual void dump_to_ostream(std::ostream& out) const = 0;
 
+  // Sets the PageView implementation for a newly created page.
+  //
+  virtual Status set_new_page_view(std::shared_ptr<const PageView>&& view [[maybe_unused]]) const
+  {
+    return batt::StatusCode::kUnimplemented;
+  }
+
+  // Returns a shared_ptr to the _mutable_ PageBuffer associated with this PageView; only supported
+  // by NewPageView.
+  //
+  virtual StatusOr<std::shared_ptr<PageBuffer>> get_new_page_buffer() const
+  {
+    return {batt::StatusCode::kUnimplemented};
+  }
+
   // Get typed user data for the specified key, if that is the active key for this PageView.
   // Otherwise, return `None`.
   //

@@ -116,7 +116,7 @@ BATT_STATIC_ASSERT_EQ(usize{1} << kDirectIOBlockAlignLog2, kDirectIOBlockAlign);
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 // Controls whether a pool of page buffers is maintained by class PageBuffer to speed up allocation.
 //
-constexpr bool kEnablePageBufferPool = true;
+constexpr bool kEnablePageBufferPoolByDefault = true;
 
 // The maximum number of page buffers of a given size to cache (in order to avoid/reduce heap
 // allocation).
@@ -158,6 +158,10 @@ constexpr bool kFastIoRingLogDeviceInit = true;
 // page recovery when generation == 0).
 //
 constexpr bool kFastIoRingPageDeviceInit = true;
+
+/** \brief Define as 1 to enable tracking of new page events, 0 to disable.
+ */
+#define LLFS_TRACK_NEW_PAGE_EVENTS 0
 
 }  // namespace llfs
 

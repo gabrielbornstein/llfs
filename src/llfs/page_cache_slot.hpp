@@ -13,7 +13,6 @@
 #include <llfs/config.hpp>
 //
 #include <llfs/int_types.hpp>
-#include <llfs/lru_clock.hpp>
 #include <llfs/optional.hpp>
 #include <llfs/page_id.hpp>
 #include <llfs/page_view.hpp>
@@ -119,15 +118,6 @@ class PageCacheSlot
 
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
-  /** \brief When a page is hinted/marked as `obsolete`, this number is added to the LRU logical
-   * time stamp when determining which slot to evict under pressure.
-   *
-   * The obsolete penality is cleared when `clear()` or `fill()` is called.
-   */
-  static constexpr i64 kObsoletePenalty = -(i64{1} << 56);
-
-  //+++++++++++-+-+--+----- --- -- -  -  -   -
-
   // Forward-declarations of member types.
   //
   class Pool;       // defined in <llfs/page_cache_slot_pool.hpp>
@@ -213,7 +203,7 @@ class PageCacheSlot
    * extension the pool that owns it) in scope, but it does not prevent the slot from being evicted
    * and refilled.  Think of this as a weak reference count.
    */
-  u64 ref_count() const;
+  u64 cache_slot_ref_count() const;
 
   /** \brief Adds a (weak/non-pinning) reference to the slot.
    *
@@ -249,7 +239,8 @@ class PageCacheSlot
    * A slot is removed from the cache's LRU list when its pin count goes from 0 -> 1, and placed
    * back at the "most recently used" end of the LRU list when the pin count goes from 1 -> 0.
    */
-  PinnedRef acquire_pin(PageId key, bool ignore_key = false);
+  PinnedRef acquire_pin(PageId key, IgnoreKey ignore_key = IgnoreKey{false},
+                        IgnoreGeneration ignore_generation = IgnoreGeneration{false});
 
   /** \brief Called when creating a copy of PinnedCacheSlot, i.e. only when the pin count is going
    * from n -> n+1, where n > 0.
@@ -273,6 +264,12 @@ class PageCacheSlot
    */
   bool evict_if_key_equals(PageId key);
 
+  /** \brief Attempts to evict the slot; the caller must be holding a pin.  Ownership of the
+   * caller's pin is transferred to this function; the pin is released regardless of whether the
+   * eviction succeeded.
+   */
+  bool evict_and_release_pin();
+
   /** \brief Resets the key and value for this slot.
    *
    * The generation counter must be odd (indicating the slot has been evicted) prior to calling this
@@ -289,17 +286,9 @@ class PageCacheSlot
    */
   void clear();
 
-  /** \brief Returns the page size (if any) of the cached page for this slot.
-   *
-   * This function MUST be called while the slot is invalid, or we panic.
-   */
-  PageSize get_page_size_while_invalid() const;
-
   //----- --- -- -  -  -   -
 
   /** \brief Updates the latest use logical timestamp for this object, to make eviction less likely.
-   *
-   * Only has an effect if the "obsolete hint" (see set_obsolete_hint, get_obsolete_hint) is false.
    */
   void update_latest_use(i64 lru_priority);
 
@@ -308,6 +297,11 @@ class PageCacheSlot
    * This function sets the latest_use LTS to a very old value.
    */
   void set_obsolete_hint();
+
+  /** \brief If the latest use counter for this slot non-positive, returns true (indicating this
+   * slot is ready to be evicted); otherwise, decrement the use counter and return false.
+   */
+  bool expire();
 
   /** \brief Returns the current latest use logical timestamp.
    */
@@ -335,16 +329,21 @@ class PageCacheSlot
    */
   void set_valid();
 
+  /** \brief Called when this slot is successfully evicted.
+   */
+  void on_evict_success();
+
   //+++++++++++-+-+--+----- --- -- -  -  -   -
 
   Pool& pool_;
   PageId key_;
   Optional<batt::Latch<std::shared_ptr<const PageView>>> value_;
-  batt::Latch<std::shared_ptr<const PageView>>* p_value_{nullptr};
+  batt::Latch<std::shared_ptr<const PageView>>* p_value_ = nullptr;
   std::atomic<u64> state_{0};
+#if LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
   std::atomic<u64> ref_count_{0};
+#endif
   std::atomic<i64> latest_use_{0};
-  std::atomic<i64> obsolete_{0};
   PageSize page_size_{0};
 };
 
@@ -394,19 +393,23 @@ BATT_ALWAYS_INLINE inline u64 PageCacheSlot::pin_count() const
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-BATT_ALWAYS_INLINE inline u64 PageCacheSlot::ref_count() const
+BATT_ALWAYS_INLINE inline u64 PageCacheSlot::cache_slot_ref_count() const
 {
+#if LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
   return this->ref_count_.load(std::memory_order_acquire);
+#else
+  return 0;
+#endif
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 BATT_ALWAYS_INLINE inline void PageCacheSlot::add_ref()
 {
+#if LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
   [[maybe_unused]] const auto observed_count =
       this->ref_count_.fetch_add(1, std::memory_order_relaxed);
 
-#if LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
   if (observed_count == 0) {
     this->notify_first_ref_acquired();
   }
@@ -417,16 +420,16 @@ BATT_ALWAYS_INLINE inline void PageCacheSlot::add_ref()
 //
 BATT_ALWAYS_INLINE inline void PageCacheSlot::remove_ref()
 {
+#if LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
   const auto observed_count = this->ref_count_.fetch_sub(1, std::memory_order_release);
   LLFS_PAGE_CACHE_ASSERT_GT(observed_count, 0);
 
   if (observed_count == 1) {
     (void)this->ref_count_.load(std::memory_order_acquire);
 
-#if LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
     this->notify_last_ref_released();
-#endif  // LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
   }
+#endif  // LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -447,15 +450,26 @@ BATT_ALWAYS_INLINE inline void PageCacheSlot::extend_pin()
 //
 BATT_ALWAYS_INLINE inline void PageCacheSlot::update_latest_use(i64 lru_priority)
 {
-  this->latest_use_.store(LRUClock::advance_local() + this->obsolete_.load() + lru_priority);
+  const i64 desired = std::max<i64>(lru_priority, 1);
+  const i64 observed = this->latest_use_.load();
+  if (observed != desired) {
+    this->latest_use_.store(desired);
+  }
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
 BATT_ALWAYS_INLINE inline void PageCacheSlot::set_obsolete_hint()
 {
-  this->obsolete_.store(kObsoletePenalty);
-  this->update_latest_use(0);
+  this->latest_use_.store(0);
+}
+
+//==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
+//
+BATT_ALWAYS_INLINE inline bool PageCacheSlot::expire()
+{
+  const i64 observed = this->latest_use_.fetch_sub(1);
+  return observed <= 1;
 }
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -535,7 +549,9 @@ namespace llfs {
 
 //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 //
-BATT_ALWAYS_INLINE inline auto PageCacheSlot::acquire_pin(PageId key, bool ignore_key) -> PinnedRef
+BATT_ALWAYS_INLINE inline auto PageCacheSlot::acquire_pin(PageId key, IgnoreKey ignore_key,
+                                                          IgnoreGeneration ignore_generation)
+    -> PinnedRef
 {
   const auto old_state = this->state_.fetch_add(kPinCountDelta, std::memory_order_acquire);
   const auto new_state = old_state + kPinCountDelta;
@@ -557,7 +573,9 @@ BATT_ALWAYS_INLINE inline auto PageCacheSlot::acquire_pin(PageId key, bool ignor
   // the key.  If the key doesn't match, release the ref and return failure.
   //
   if (!Self::is_valid(old_state) ||
-      (!ignore_key && (!this->key_.is_valid() || this->key_ != key))) {
+      (!ignore_key && (!this->key_.is_valid() ||
+                       !((!ignore_generation && this->key_ == key) ||
+                         (ignore_generation && is_same_physical_page(this->key_, key)))))) {
     this->release_pin();
     return PinnedRef{};
   }

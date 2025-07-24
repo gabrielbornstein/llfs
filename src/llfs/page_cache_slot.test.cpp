@@ -54,6 +54,8 @@ namespace {
 
 using namespace llfs::int_types;
 
+using llfs::IgnoreKey;
+
 constexpr usize kNumTestSlots = 4;
 const std::string kTestPoolName = "Test PageCacheSlot Pool";
 const llfs::PageSize kFakePageSize{4096};
@@ -73,7 +75,7 @@ class PageCacheSlotTest : public ::testing::Test
 TEST_F(PageCacheSlotTest, CreateSlots)
 {
   for (usize i = 0; i < kNumTestSlots; ++i) {
-    llfs::PageCacheSlot* slot = this->pool_->allocate();
+    llfs::PageCacheSlot* slot = this->pool_->allocate(kFakePageSize);
 
     ASSERT_NE(slot, nullptr);
     EXPECT_EQ(slot, this->pool_->get_slot(i));
@@ -86,7 +88,7 @@ TEST_F(PageCacheSlotTest, CreateSlots)
     }
 
     EXPECT_FALSE(slot->key().is_valid());
-    EXPECT_EQ(slot->ref_count(), 0u);
+    EXPECT_EQ(slot->cache_slot_ref_count(), 0u);
     EXPECT_EQ(slot->pin_count(), 0u);
   }
 }
@@ -99,9 +101,9 @@ TEST_F(PageCacheSlotTest, AddRemoveRefDeath)
 {
   EXPECT_EQ(this->pool_->use_count(), 1u);
 
-  llfs::PageCacheSlot* slot = this->pool_->allocate();
+  llfs::PageCacheSlot* slot = this->pool_->allocate(kFakePageSize);
 
-  EXPECT_EQ(slot->ref_count(), 0u);
+  EXPECT_EQ(slot->cache_slot_ref_count(), 0u);
 
 #if LLFS_PAGE_CACHE_SLOT_ENABLE_ASSERTS
   EXPECT_DEATH(slot->remove_ref(), "Assert.*failed:.*observed_count.*>.*0");
@@ -109,38 +111,39 @@ TEST_F(PageCacheSlotTest, AddRemoveRefDeath)
 
   slot->add_ref();
 
-  EXPECT_EQ(slot->ref_count(), 1u);
-
 #if LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
+  EXPECT_EQ(slot->cache_slot_ref_count(), 1u);
   EXPECT_EQ(this->pool_->use_count(), 2u);
 #else
+  EXPECT_EQ(slot->cache_slot_ref_count(), 0u);
   EXPECT_EQ(this->pool_->use_count(), 1u);
 #endif
 
   slot->add_ref();
   slot->add_ref();
 
-  EXPECT_EQ(slot->ref_count(), 3u);
 #if LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
+  EXPECT_EQ(slot->cache_slot_ref_count(), 3u);
   EXPECT_EQ(this->pool_->use_count(), 2u);
 #else
+  EXPECT_EQ(slot->cache_slot_ref_count(), 0u);
   EXPECT_EQ(this->pool_->use_count(), 1u);
 #endif
 
   slot->remove_ref();
 
-  EXPECT_EQ(slot->ref_count(), 2u);
-
 #if LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
+  EXPECT_EQ(slot->cache_slot_ref_count(), 2u);
   EXPECT_EQ(this->pool_->use_count(), 2u);
 #else
+  EXPECT_EQ(slot->cache_slot_ref_count(), 0u);
   EXPECT_EQ(this->pool_->use_count(), 1u);
 #endif
 
   slot->remove_ref();
   slot->remove_ref();
 
-  EXPECT_EQ(slot->ref_count(), 0u);
+  EXPECT_EQ(slot->cache_slot_ref_count(), 0u);
   EXPECT_EQ(this->pool_->use_count(), 1u);
 }
 
@@ -159,7 +162,7 @@ TEST_F(PageCacheSlotTest, AddRemoveRefDeath)
 //
 TEST_F(PageCacheSlotTest, StateTransitions)
 {
-  llfs::PageCacheSlot* slot = this->pool_->allocate();
+  llfs::PageCacheSlot* slot = this->pool_->allocate(kFakePageSize);
 
   EXPECT_FALSE(slot->is_valid());
 
@@ -172,16 +175,20 @@ TEST_F(PageCacheSlotTest, StateTransitions)
   //
   {
     llfs::PageCacheSlot::PinnedRef valid_cleared_ref =
-        slot->acquire_pin(llfs::PageId{}, /*ignore_key=*/true);
+        slot->acquire_pin(llfs::PageId{}, IgnoreKey{true});
     EXPECT_EQ(valid_cleared_ref.value(), nullptr);
     EXPECT_EQ(slot->pin_count(), 1u);
-    EXPECT_EQ(slot->ref_count(), 1u);
+#if LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
+    EXPECT_EQ(slot->cache_slot_ref_count(), 1u);
+#else
+    EXPECT_EQ(slot->cache_slot_ref_count(), 0u);
+#endif  // LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
   }
 
   //     j. Valid + Cleared + Pinned --(release_pin)--> Valid + Cleared
   //
   EXPECT_EQ(slot->pin_count(), 0);
-  EXPECT_EQ(slot->ref_count(), 0);
+  EXPECT_EQ(slot->cache_slot_ref_count(), 0);
 
   //     c. Valid + Cleared --(evict)--> Invalid
   //
@@ -204,8 +211,13 @@ TEST_F(PageCacheSlotTest, StateTransitions)
     EXPECT_EQ(pinned_ref.get(), slot->value());
     EXPECT_EQ(pinned_ref.pin_count(), 1u);
     EXPECT_EQ(slot->pin_count(), 1u);
-    EXPECT_EQ(pinned_ref.ref_count(), 1u);
-    EXPECT_EQ(slot->ref_count(), 1u);
+#if LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
+    EXPECT_EQ(pinned_ref.cache_slot_ref_count(), 1u);
+    EXPECT_EQ(slot->cache_slot_ref_count(), 1u);
+#else
+    EXPECT_EQ(pinned_ref.cache_slot_ref_count(), 0u);
+    EXPECT_EQ(slot->cache_slot_ref_count(), 0u);
+#endif  // LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
 
     //     f. Valid + Filled + Pinned --(acquire_pin)-- >Valid + Filled + Pinned
     //
@@ -215,8 +227,13 @@ TEST_F(PageCacheSlotTest, StateTransitions)
     EXPECT_EQ(ref2.slot(), slot);
     EXPECT_EQ(pinned_ref.pin_count(), 2u);
     EXPECT_EQ(slot->pin_count(), 2u);
-    EXPECT_EQ(pinned_ref.ref_count(), 1u);
-    EXPECT_EQ(slot->ref_count(), 1u);
+#if LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
+    EXPECT_EQ(pinned_ref.cache_slot_ref_count(), 1u);
+    EXPECT_EQ(slot->cache_slot_ref_count(), 1u);
+#else
+    EXPECT_EQ(pinned_ref.cache_slot_ref_count(), 0u);
+    EXPECT_EQ(slot->cache_slot_ref_count(), 0u);
+#endif  // LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
 
     llfs::PageCacheSlot::PinnedRef ref3;
 
@@ -228,8 +245,13 @@ TEST_F(PageCacheSlotTest, StateTransitions)
     EXPECT_EQ(ref3.slot(), slot);
     EXPECT_EQ(pinned_ref.pin_count(), 3u);
     EXPECT_EQ(slot->pin_count(), 3u);
-    EXPECT_EQ(pinned_ref.ref_count(), 1u);
-    EXPECT_EQ(slot->ref_count(), 1u);
+#if LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
+    EXPECT_EQ(pinned_ref.cache_slot_ref_count(), 1u);
+    EXPECT_EQ(slot->cache_slot_ref_count(), 1u);
+#else
+    EXPECT_EQ(pinned_ref.cache_slot_ref_count(), 0u);
+    EXPECT_EQ(slot->cache_slot_ref_count(), 0u);
+#endif  // LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
 
     {
       llfs::PageCacheSlot::PinnedRef ref4 = std::move(ref2);
@@ -239,8 +261,13 @@ TEST_F(PageCacheSlotTest, StateTransitions)
       EXPECT_TRUE(ref4);
       EXPECT_EQ(pinned_ref.pin_count(), 3u);
       EXPECT_EQ(slot->pin_count(), 3u);
-      EXPECT_EQ(pinned_ref.ref_count(), 1u);
-      EXPECT_EQ(slot->ref_count(), 1u);
+#if LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
+      EXPECT_EQ(pinned_ref.cache_slot_ref_count(), 1u);
+      EXPECT_EQ(slot->cache_slot_ref_count(), 1u);
+#else
+      EXPECT_EQ(pinned_ref.cache_slot_ref_count(), 0u);
+      EXPECT_EQ(slot->cache_slot_ref_count(), 0u);
+#endif  // LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
 
       {
         llfs::PageCacheSlot::PinnedRef ref5;
@@ -254,22 +281,37 @@ TEST_F(PageCacheSlotTest, StateTransitions)
         EXPECT_TRUE(ref5);
         EXPECT_EQ(pinned_ref.pin_count(), 3u);
         EXPECT_EQ(slot->pin_count(), 3u);
-        EXPECT_EQ(pinned_ref.ref_count(), 1u);
-        EXPECT_EQ(slot->ref_count(), 1u);
+#if LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
+        EXPECT_EQ(pinned_ref.cache_slot_ref_count(), 1u);
+        EXPECT_EQ(slot->cache_slot_ref_count(), 1u);
+#else
+        EXPECT_EQ(pinned_ref.cache_slot_ref_count(), 0u);
+        EXPECT_EQ(slot->cache_slot_ref_count(), 0u);
+#endif  // LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
       }
       //
       //     g. Valid + Filled + Pinned --(release_pin)-- >Valid + Filled + Pinned
 
       EXPECT_EQ(pinned_ref.pin_count(), 2u);
       EXPECT_EQ(slot->pin_count(), 2u);
-      EXPECT_EQ(pinned_ref.ref_count(), 1u);
-      EXPECT_EQ(slot->ref_count(), 1u);
+#if LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
+      EXPECT_EQ(pinned_ref.cache_slot_ref_count(), 1u);
+      EXPECT_EQ(slot->cache_slot_ref_count(), 1u);
+#else
+      EXPECT_EQ(pinned_ref.cache_slot_ref_count(), 0u);
+      EXPECT_EQ(slot->cache_slot_ref_count(), 0u);
+#endif  // LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
     }
 
     EXPECT_EQ(pinned_ref.pin_count(), 1u);
     EXPECT_EQ(slot->pin_count(), 1u);
-    EXPECT_EQ(pinned_ref.ref_count(), 1u);
-    EXPECT_EQ(slot->ref_count(), 1u);
+#if LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
+    EXPECT_EQ(pinned_ref.cache_slot_ref_count(), 1u);
+    EXPECT_EQ(slot->cache_slot_ref_count(), 1u);
+#else
+    EXPECT_EQ(pinned_ref.cache_slot_ref_count(), 0u);
+    EXPECT_EQ(slot->cache_slot_ref_count(), 0u);
+#endif  // LLFS_PAGE_CACHE_SLOT_UPDATE_POOL_REF_COUNT
   }
   //
   //     h. Valid + Filled + Pinned --(release_pin)-- >Valid + Filled
@@ -279,35 +321,34 @@ TEST_F(PageCacheSlotTest, StateTransitions)
   //     e. Valid + Filled --(acquire_pin)--> Valid + Filled + Pinned
   //
   EXPECT_EQ(slot->pin_count(), 0u);
-  EXPECT_EQ(slot->ref_count(), 0u);
+  EXPECT_EQ(slot->cache_slot_ref_count(), 0u);
   EXPECT_TRUE(slot->is_valid());
   {
-    llfs::PageCacheSlot::PinnedRef pinned_ref =
-        slot->acquire_pin(llfs::PageId{}, /*ignore_key=*/true);
+    llfs::PageCacheSlot::PinnedRef pinned_ref = slot->acquire_pin(llfs::PageId{}, IgnoreKey{true});
 
     EXPECT_TRUE(pinned_ref);
     EXPECT_TRUE(slot->is_valid());
     EXPECT_EQ(slot->pin_count(), 1u);
   }
   EXPECT_EQ(slot->pin_count(), 0u);
-  EXPECT_EQ(slot->ref_count(), 0u);
+  EXPECT_EQ(slot->cache_slot_ref_count(), 0u);
   EXPECT_TRUE(slot->is_valid());
   {
     llfs::PageCacheSlot::PinnedRef pinned_ref =
-        slot->acquire_pin(llfs::PageId{1}, /*ignore_key=*/false);
+        slot->acquire_pin(llfs::PageId{1}, IgnoreKey{false});
 
     EXPECT_TRUE(pinned_ref);
     EXPECT_TRUE(slot->is_valid());
     EXPECT_EQ(slot->pin_count(), 1u);
   }
   EXPECT_EQ(slot->pin_count(), 0u);
-  EXPECT_EQ(slot->ref_count(), 0u);
+  EXPECT_EQ(slot->cache_slot_ref_count(), 0u);
   EXPECT_TRUE(slot->is_valid());
   {
     // Try to acquire pin using the wrong PageId; expect to fail.
     //
     llfs::PageCacheSlot::PinnedRef pinned_ref =
-        slot->acquire_pin(llfs::PageId{2}, /*ignore_key=*/false);
+        slot->acquire_pin(llfs::PageId{2}, IgnoreKey{false});
 
     EXPECT_FALSE(pinned_ref);
     EXPECT_TRUE(slot->is_valid());
@@ -326,7 +367,7 @@ TEST_F(PageCacheSlotTest, StateTransitions)
 //
 TEST_F(PageCacheSlotTest, ExtendPinSuccess)
 {
-  llfs::PageCacheSlot* slot = this->pool_->allocate();
+  llfs::PageCacheSlot* slot = this->pool_->allocate(kFakePageSize);
 
   llfs::PageCacheSlot::PinnedRef pinned_ref =
       slot->fill(llfs::PageId{1}, kFakePageSize, /*lru_priority=*/0);
@@ -349,7 +390,7 @@ TEST_F(PageCacheSlotTest, ExtendPinSuccess)
 TEST_F(PageCacheSlotTest, ExtendPinDeath)
 {
 #if LLFS_PAGE_CACHE_SLOT_ENABLE_ASSERTS
-  llfs::PageCacheSlot* slot = this->pool_->allocate();
+  llfs::PageCacheSlot* slot = this->pool_->allocate(kFakePageSize);
 
   EXPECT_DEATH(slot->extend_pin(), "Assert.*failed:.*is.*pinned");
 #endif
@@ -360,7 +401,7 @@ TEST_F(PageCacheSlotTest, ExtendPinDeath)
 //
 TEST_F(PageCacheSlotTest, EvictFailure)
 {
-  llfs::PageCacheSlot* slot = this->pool_->allocate();
+  llfs::PageCacheSlot* slot = this->pool_->allocate(kFakePageSize);
 
   llfs::PageCacheSlot::PinnedRef pinned_ref =
       slot->fill(llfs::PageId{1}, kFakePageSize, /*lru_priority=*/0);
@@ -374,7 +415,7 @@ TEST_F(PageCacheSlotTest, EvictFailure)
 //
 TEST_F(PageCacheSlotTest, EvictIfKeyEqualsSuccess)
 {
-  llfs::PageCacheSlot* slot = this->pool_->allocate();
+  llfs::PageCacheSlot* slot = this->pool_->allocate(kFakePageSize);
   {
     llfs::PageCacheSlot::PinnedRef pinned_ref =
         slot->fill(llfs::PageId{1}, kFakePageSize, /*lru_priority=*/0);
@@ -390,7 +431,7 @@ TEST_F(PageCacheSlotTest, EvictIfKeyEqualsSuccess)
 //
 TEST_F(PageCacheSlotTest, EvictIfKeyEqualsFailurePinned)
 {
-  llfs::PageCacheSlot* slot = this->pool_->allocate();
+  llfs::PageCacheSlot* slot = this->pool_->allocate(kFakePageSize);
   {
     llfs::PageCacheSlot::PinnedRef pinned_ref =
         slot->fill(llfs::PageId{1}, kFakePageSize, /*lru_priority=*/0);
@@ -406,7 +447,7 @@ TEST_F(PageCacheSlotTest, EvictIfKeyEqualsFailurePinned)
 //
 TEST_F(PageCacheSlotTest, EvictIfKeyEqualsFailureWrongKey)
 {
-  llfs::PageCacheSlot* slot = this->pool_->allocate();
+  llfs::PageCacheSlot* slot = this->pool_->allocate(kFakePageSize);
   {
     llfs::PageCacheSlot::PinnedRef pinned_ref =
         slot->fill(llfs::PageId{1}, kFakePageSize, /*lru_priority=*/0);
@@ -423,7 +464,7 @@ TEST_F(PageCacheSlotTest, EvictIfKeyEqualsFailureWrongKey)
 //
 TEST_F(PageCacheSlotTest, FillFailureAlreadyFilledDeath)
 {
-  llfs::PageCacheSlot* slot = this->pool_->allocate();
+  llfs::PageCacheSlot* slot = this->pool_->allocate(kFakePageSize);
   {
     llfs::PageCacheSlot::PinnedRef pinned_ref =
         slot->fill(llfs::PageId{1}, kFakePageSize, /*lru_priority=*/0);
@@ -445,7 +486,7 @@ TEST_F(PageCacheSlotTest, FillFailureAlreadyFilledDeath)
 //
 TEST_F(PageCacheSlotTest, FillFailureClearedDeath)
 {
-  llfs::PageCacheSlot* slot = this->pool_->allocate();
+  llfs::PageCacheSlot* slot = this->pool_->allocate(kFakePageSize);
 
   EXPECT_FALSE(slot->is_valid());
 
@@ -453,7 +494,7 @@ TEST_F(PageCacheSlotTest, FillFailureClearedDeath)
 
   {
     llfs::PageCacheSlot::PinnedRef valid_cleared_ref =
-        slot->acquire_pin(llfs::PageId{}, /*ignore_key=*/true);
+        slot->acquire_pin(llfs::PageId{}, IgnoreKey{true});
     EXPECT_TRUE(slot->is_valid());
     EXPECT_DEATH(slot->fill(llfs::PageId{2}, kFakePageSize, /*lru_priority=*/0),
                  "Assert.*fail.*is.*valid");
@@ -472,10 +513,10 @@ TEST_F(PageCacheSlotTest, FillFailureClearedDeath)
 //
 TEST_F(PageCacheSlotTest, LatestUse)
 {
-  llfs::PageCacheSlot* slot = this->pool_->allocate();
+  llfs::PageCacheSlot* slot = this->pool_->allocate(kFakePageSize);
 
   i64 t0 = slot->get_latest_use();
-  slot->update_latest_use(0);
+  slot->update_latest_use(t0 + 1);
   i64 t1 = slot->get_latest_use();
 
   EXPECT_GT(t1 - t0, 0);
@@ -493,10 +534,10 @@ TEST_F(PageCacheSlotTest, RefCounting)
 {
   // The slot will start off in an Invalid state with a pin count and ref count of 0.
   //
-  llfs::PageCacheSlot* slot = this->pool_->allocate();
+  llfs::PageCacheSlot* slot = this->pool_->allocate(kFakePageSize);
   EXPECT_FALSE(slot->is_valid());
   EXPECT_EQ(slot->pin_count(), 0);
-  EXPECT_EQ(slot->ref_count(), 0);
+  EXPECT_EQ(slot->cache_slot_ref_count(), 0);
 
   u64 numThreads = std::thread::hardware_concurrency();
   std::vector<std::thread> threads;
@@ -513,7 +554,7 @@ TEST_F(PageCacheSlotTest, RefCounting)
       if (i % 2) {
         {
           llfs::PageCacheSlot::PinnedRef pinned =
-              slot->acquire_pin(llfs::PageId{}, /*ignore_key=*/true);
+              slot->acquire_pin(llfs::PageId{}, IgnoreKey{true});
         }
       } else {
         slot->evict_if_key_equals(llfs::PageId{1});
@@ -532,7 +573,7 @@ TEST_F(PageCacheSlotTest, RefCounting)
   // incremented and decremented symmetrically, accounting for new pinning and new unpinning.
   //
   EXPECT_EQ(slot->pin_count(), 0);
-  EXPECT_EQ(slot->ref_count(), 0);
+  EXPECT_EQ(slot->cache_slot_ref_count(), 0);
 }
 
 }  // namespace

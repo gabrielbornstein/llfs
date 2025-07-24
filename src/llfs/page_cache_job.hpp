@@ -61,7 +61,7 @@ class PageCacheJob : public PageLoader
    public:
     NewPage() = default;
 
-    explicit NewPage(std::shared_ptr<PageBuffer>&& buffer) noexcept;
+    explicit NewPage(PinnedPage&& pinned_page) noexcept;
 
     bool set_view(std::shared_ptr<const PageView>&& v);
 
@@ -73,17 +73,22 @@ class PageCacheJob : public PageLoader
 
     std::shared_ptr<const PageBuffer> const_buffer() const
     {
-      return this->view()->data();
+      return this->pinned_page_.get_page_buffer();
     }
 
     const PackedPageHeader& const_page_header() const
     {
-      return get_page_header(*this->const_buffer());
+      return this->pinned_page_->header();
+    }
+
+    StatusOr<PinnedPage> get_pinned_page() const
+    {
+      return {this->pinned_page_};
     }
 
    private:
-    std::shared_ptr<PageBuffer> buffer_;
-    Optional<std::shared_ptr<const PageView>> view_;
+    PinnedPage pinned_page_;
+    bool has_view_ = false;
   };
 
   //==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
@@ -190,7 +195,8 @@ class PageCacheJob : public PageLoader
   //
   StatusOr<std::shared_ptr<PageBuffer>> new_page(PageSize size,
                                                  batt::WaitForResource wait_for_resource,
-                                                 const PageLayoutId& layout_id, u64 callers,
+                                                 const PageLayoutId& layout_id,
+                                                 LruPriority lru_priority, u64 callers,
                                                  const batt::CancelToken& cancel_token);
 
   // Inserts a new page into the cache.  The passed PageView must have been created using a
