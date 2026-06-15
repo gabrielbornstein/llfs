@@ -12,6 +12,9 @@ project(llfs CXX)
 include(${COR_CMAKE_INCLUDE_DIR}/common.cmake)
 include(${CMAKE_BINARY_DIR}/conan_find_requirements.cmake)
 
+add_compile_options(--coverage -O0 -fno-inline -fno-default-inline -fno-elide-constructors)
+add_link_options(--coverage)
+
 #==#==========+==+=+=++=+++++++++++-+-+--+----- --- -- -  -  -   -
 # Disable link-time optimization.  (Breaks Apple Silicon and Windows builds)
 #
